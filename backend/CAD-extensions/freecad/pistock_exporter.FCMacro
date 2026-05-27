@@ -1,0 +1,104 @@
+import os
+import tempfile
+import uuid
+import urllib.request
+import FreeCAD as App
+import FreeCADGui as Gui
+
+# Configuration de l'adresse de votre serveur FastAPI
+API_URL = "http://127.0.0.1:8000/api/v1/parts/upload"
+
+def export_and_send_to_pistock():
+    # 1. Vérifier qu'un document est ouvert
+    doc = App.activeDocument()
+    if not doc:
+        App.Console.PrintError("❌ Erreur : Aucun document ouvert dans FreeCAD.\n")
+        return
+
+    # SÉCURITÉ : Vérifier si le document a bien été enregistré au moins une fois
+    if not doc.FileName:
+        App.Console.PrintError("⚠️  Erreur : Veuillez enregistrer votre fichier (.FCStd) avant de lancer l'export.\n")
+        return
+
+    part_name = doc.Name
+    App.Console.PrintMessage(f"🚀 Initialisation de l'export PiStock pour : {part_name}\n")
+
+    # 2. Utilisation d'un vrai dossier temporaire système (/tmp/ sous Linux)
+    tmp_dir = tempfile.gettempdir()
+    fcstd_temp = os.path.join(tmp_dir, f"{part_name}.FCStd")
+    png_temp = os.path.join(tmp_dir, f"{part_name}.png")
+    glb_temp = os.path.join(tmp_dir, f"{part_name}.glb")   # glTF binaire (FastAPI friendly)
+
+    try:
+        # A. Sauvegarde d'une copie propre du fichier natif
+        doc.saveCopy(fcstd_temp)
+        App.Console.PrintMessage(f"✔️  Fichier temporaire généré dans : {fcstd_temp}\n")
+
+        # B. Capture d'écran (Thumbnail) de la vue active
+        view = Gui.activeDocument().activeView()
+        if view:
+            view.saveImage(png_temp, 800, 600, "Transparent")
+            App.Console.PrintMessage("✔️  Vignette .png générée.\n")
+        else:
+            raise Exception("Impossible d'accéder à la vue 3D active.")
+
+        # C. Export 3D .glb (glTF binaire)
+        # On ne garde que les objets ayant une forme exportable
+        all_objects = [o for o in doc.Objects if hasattr(o, "Shape")]
+        if not all_objects:
+            raise Exception("Le document ne contient aucun objet exportable.")
+
+        # FreeCAD 1.1 : l'export glTF passe par le module ImportGui.
+        # L'extension .glb produit un unique fichier binaire (idéal pour l'API).
+        import ImportGui
+        ImportGui.export(all_objects, glb_temp)
+
+        if os.path.exists(glb_temp):
+            App.Console.PrintMessage("✔️  Fichier 3D .glb généré et prêt.\n")
+        else:
+            raise Exception("L'exporteur glTF de FreeCAD n'a produit aucun fichier.")
+
+        # D. Envoi des fichiers à l'API via Multipart HTTP
+        App.Console.PrintMessage("📡 Connexion au serveur PiStock et transfert...\n")
+
+        boundary = uuid.uuid4().hex
+        parts = []
+
+        # Champ texte part_name
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"part_name\"\r\n\r\n{part_name}\r\n")
+
+        # Fonction pour packager les fichiers
+        def add_file_part(field_name, file_path, content_type):
+            filename = os.path.basename(file_path)
+            head = f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+            with open(file_path, "rb") as f:
+                body = f.read()
+            return head.encode('utf-8') + body + b"\r\n"
+
+        body_bytes = b"".join([p.encode('utf-8') for p in parts])
+        body_bytes += add_file_part("cad_file", fcstd_temp, "application/octet-stream")
+        body_bytes += add_file_part("thumbnail_file", png_temp, "image/png")
+        body_bytes += add_file_part("glb_file", glb_temp, "model/gltf-binary")
+        body_bytes += f"--{boundary}--\r\n".encode('utf-8')
+
+        req = urllib.request.Request(API_URL, data=body_bytes)
+        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+
+        with urllib.request.urlopen(req) as response:
+            res_data = response.read().decode('utf-8')
+            App.Console.PrintMessage(f"🎉 [SUCCESS] PiStock mis à jour ! Réponse du serveur : {res_data}\n")
+
+    except Exception as e:
+        App.Console.PrintError(f"❌ Échec de l'opération : {str(e)}\n")
+
+    finally:
+        # 4. Nettoyage des fichiers temporaires locaux
+        for f in [fcstd_temp, png_temp, glb_temp]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except:
+                    pass
+
+# Lancement de l'export
+export_and_send_to_pistock()

@@ -33,7 +33,7 @@ pip install --upgrade pip
 
 # 6. Install the core dependencies for PiStock
 echo "📥 Installing FastAPI, SQLModel, and Uvicorn..."
-pip install fastapi sqlmodel uvicorn
+pip install fastapi sqlmodel uvicorn python-multipart
 
 # 7. Create a minimalist main.py file for immediate testing
 if [ ! -f "main.py" ]; then
