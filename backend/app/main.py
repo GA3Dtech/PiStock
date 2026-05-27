@@ -160,6 +160,86 @@ def get_part(part_id: int):
         }
 
 
+@app.post("/api/v1/parts")
+def create_part_manual(part_name: str = Form(...)):
+    """Crée une pièce SANS passer par la CAO (pas de fichiers).
+    Utilisé par le bouton "+ Nouvelle pièce" du dashboard.
+    L'id est attribué automatiquement par SQLite."""
+    part_name = part_name.strip()
+    if not part_name:
+        raise HTTPException(status_code=400,
+                            detail="Le nom de la pièce est obligatoire.")
+
+    with Session(engine) as session:
+        # On verifie l'unicite du nom avant insertion (sinon on aurait
+        # une IntegrityError peu parlante a renvoyer au frontend).
+        existing = session.exec(
+            select(Parts).where(Parts.part_name == part_name)
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=409,  # 409 Conflict = ressource existe deja
+                detail=f"Une pièce nommée '{part_name}' existe déjà "
+                       f"(id={existing.id}).",
+            )
+
+        part = Parts(part_name=part_name)
+        session.add(part)
+        session.commit()
+        session.refresh(part)
+        logger.info(f"Pièce '{part_name}' créée manuellement (id={part.id}).")
+        return {
+            "status": "success",
+            "id": part.id,
+            "part_name": part.part_name,
+        }
+
+
+@app.post("/api/v1/parts/{part_id}/stock-photo")
+async def upload_stock_photo(part_id: int, photo: UploadFile = File(...)):
+    """Ajoute (ou remplace) la photo de stock d'une piece.
+    Le fichier est sauvegarde sous data-pistock/uploads/img/stock_<id>_<ts>.<ext>
+    et le chemin est stocke dans la table 'stock'. Si aucune ligne
+    stock n'existe encore pour cette piece, on en cree une."""
+    with Session(engine) as session:
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Aucune pièce avec l'id {part_id}.")
+
+        # Sauvegarde du fichier sur disque
+        ts_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        _, ext = os.path.splitext(photo.filename or "")
+        if not ext:
+            ext = ".jpg"  # fallback raisonnable
+        stamped_name = f"stock_{part_id}_{ts_tag}{ext}"
+        dest_dir = os.path.join(DATA_DIR, "uploads", "img")
+        os.makedirs(dest_dir, exist_ok=True)
+        file_path = os.path.join(dest_dir, stamped_name)
+        with open(file_path, "wb") as buffer:
+            copyfileobj(photo.file, buffer)
+        rel_path = f"uploads/img/{stamped_name}"
+        logger.info(f"Photo stock sauvegardée : {file_path}")
+
+        # Mise a jour (ou creation) de la ligne stock
+        stock_row = session.exec(
+            select(Stock).where(Stock.id_parts == part_id)
+        ).first()
+        if stock_row is None:
+            stock_row = Stock(id_parts=part_id, path_2_img=rel_path)
+            session.add(stock_row)
+        else:
+            stock_row.path_2_img = rel_path
+            session.add(stock_row)
+        session.commit()
+
+        return {
+            "status": "success",
+            "part_id": part_id,
+            "stock_img_url": f"/{rel_path}",
+        }
+
+
 @app.post("/api/v1/parts/upload")
 async def upload_new_part(
     part_id: int | None = Form(default=None),

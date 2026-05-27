@@ -12,12 +12,38 @@
     </header>
 
     <main>
-        <!-- Conteneur qui sera rempli par dashboard.js.
-             On affiche un message de chargement par défaut. -->
+        <!-- Barre d'actions : bouton "Nouvelle piece" en haut a droite -->
+        <div class="actions-bar">
+            <button class="btn-primary" id="btn-new-part">
+                + Nouvelle pièce
+            </button>
+        </div>
+
+        <!-- Conteneur de la liste, rempli par dashboard.js -->
         <div id="parts-container" class="loading">
             Chargement des pièces…
         </div>
     </main>
+
+    <!-- ============================================================
+         MODAL : creation manuelle d'une piece (sans CAO)
+         Cache par defaut, affiche en .style.display = "flex" via JS.
+         ============================================================ -->
+    <div class="modal-backdrop" id="modal-new-part" style="display:none">
+        <div class="modal">
+            <h2>Nouvelle pièce</h2>
+            <label for="new-part-name">Nom de la pièce</label>
+            <input type="text" id="new-part-name" placeholder="ex: bracket-v2">
+            <div class="modal-error" id="modal-error"></div>
+            <div class="modal-actions">
+                <button class="btn-secondary" id="btn-cancel-new">Annuler</button>
+                <button class="btn-primary" id="btn-confirm-new">Créer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input file cache, declenche par les boutons "ajouter photo" -->
+    <input type="file" id="hidden-file-input" accept="image/*" style="display:none">
 
     <script src="/js/dashboard.js"></script>
 </body>

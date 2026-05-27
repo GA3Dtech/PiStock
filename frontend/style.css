@@ -27,6 +27,42 @@ main {
     padding: 0 1rem;
 }
 
+/* ---------- Barre d'actions du dashboard ---------- */
+.actions-bar {
+    margin-bottom: 1.5rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.btn-primary {
+    background: #0066cc;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0.9rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 2px 6px rgba(0,102,204,0.25);
+}
+
+.btn-primary:hover { background: #0055aa; }
+.btn-primary:active { transform: translateY(1px); }
+
+.btn-secondary {
+    background: #fff;
+    color: #0066cc;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-secondary:hover { background: #f5f5f7; border-color: #0066cc; }
+
 /* ---------- Etats globaux ---------- */
 .loading, .error, .empty {
     text-align: center;
@@ -37,11 +73,12 @@ main {
 .error { color: #c62828; }
 
 /* ---------- Liste des pieces (dashboard) ---------- */
+/* Chaque ligne est une "carte" independante, bien encadree,
+   plutot qu'un simple item d'une liste a fond commun. */
 .parts-list {
-    background: #fff;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
 }
 
 .part-row {
@@ -51,19 +88,34 @@ main {
     align-items: center;
     gap: 1rem;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid #f0f0f0;
-    transition: background 0.15s;
+    background: #fff;
+    border: 1px solid #e5e5ea;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    transition: box-shadow 0.15s, border-color 0.15s;
 }
 
-.part-row:last-child { border-bottom: none; }
-.part-row:hover { background: #fafafa; }
+.part-row:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    border-color: #d2d2d7;
+}
 
 .part-name {
     font-weight: 500;
     font-size: 1.05rem;
 }
 
-.thumbnail-cell, .stock-img-cell {
+/* Cellule "photo de stock" : contient soit l'image, soit le bouton
+   d'ajout. On lui donne une structure verticale pour pouvoir
+   afficher l'image ET le petit bouton de remplacement dessous. */
+.stock-img-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.thumbnail-cell, .stock-img-frame {
     width: 80px;
     height: 80px;
     background: #f5f5f7;
@@ -84,11 +136,51 @@ main {
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
-.thumbnail-cell img, .stock-img-cell img {
+.thumbnail-cell img, .stock-img-frame img {
     width: 100%;
     height: 100%;
     object-fit: contain;
 }
+
+/* Bouton "ajouter photo" qui occupe tout l'emplacement vignette
+   quand aucune photo n'est encore enregistree. */
+.btn-add-photo {
+    width: 80px;
+    height: 80px;
+    background: #f5f5f7;
+    border: 2px dashed #c7c7cc;
+    border-radius: 8px;
+    color: #6e6e73;
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.btn-add-photo:hover {
+    border-color: #0066cc;
+    color: #0066cc;
+    background: #f0f7ff;
+}
+
+.btn-add-photo .icon { font-size: 1.4rem; }
+
+/* Petit lien "Remplacer" sous une photo de stock deja existante */
+.btn-replace-photo {
+    background: none;
+    border: none;
+    color: #0066cc;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.1rem 0.3rem;
+    text-decoration: underline;
+}
+
+.btn-replace-photo:hover { color: #0055aa; }
 
 .placeholder {
     color: #c7c7cc;
@@ -111,6 +203,78 @@ main {
 }
 
 .location.empty-value { color: #c7c7cc; }
+
+/* ---------- Modal (dialogue "nouvelle pièce") ---------- */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.modal {
+    background: #fff;
+    border-radius: 14px;
+    padding: 1.75rem 2rem;
+    min-width: 360px;
+    max-width: 90vw;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+}
+
+.modal h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1.25rem;
+    font-weight: 500;
+}
+
+.modal label {
+    display: block;
+    font-size: 0.85rem;
+    color: #6e6e73;
+    margin-bottom: 0.3rem;
+}
+
+.modal input[type="text"] {
+    width: 100%;
+    padding: 0.6rem 0.8rem;
+    font-size: 1rem;
+    border: 1px solid #d2d2d7;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+
+.modal input[type="text"]:focus {
+    outline: none;
+    border-color: #0066cc;
+    box-shadow: 0 0 0 3px rgba(0,102,204,0.15);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1rem;
+}
+
+.modal-actions .btn-secondary {
+    padding: 0.55rem 1rem;
+    font-size: 0.95rem;
+}
+
+.modal-actions .btn-primary {
+    padding: 0.55rem 1.2rem;
+    font-size: 0.95rem;
+}
+
+.modal-error {
+    color: #c62828;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    min-height: 1.2em;
+}
 
 /* ---------- Page viewer 3D ---------- */
 .viewer-header {
