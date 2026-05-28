@@ -17,10 +17,6 @@ CAD_DIR = os.path.join(DATA_DIR, "uploads", "cad")
 IMG_DIR = os.path.join(DATA_DIR, "uploads", "img")
 DB_PATH = os.path.join(DATA_DIR, "pistockdatabase.sqlite3")
 
-# Dossier du frontend (HTML/JS pur). Il est à la racine du projet pistock/,
-# à côté de backend/. Depuis backend/app/, on remonte de 2 niveaux.
-FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, "../../frontend"))
-
 # S'assurer que tous les dossiers nécessaires existent
 os.makedirs(CAD_DIR, exist_ok=True)
 os.makedirs(IMG_DIR, exist_ok=True)
@@ -348,22 +344,32 @@ async def upload_new_part(
 
 
 # ----------------------------------------------------------------------
-#  FICHIERS STATIQUES
+#  FICHIERS STATIQUES + INTERFACE NiceGUI
 # ----------------------------------------------------------------------
 # 1. Les fichiers uploadés (vignettes .png, modèles .glb...) sont servis
-#    sous /uploads/. Ainsi un thumbnail_url "/uploads/img/x.png" stocké
-#    en base est directement accessible par le navigateur.
+#    sous /uploads/. C'est utilisé à la fois par l'interface NiceGUI
+#    (pour afficher les images) et par le viewer 3D (qui charge le .glb
+#    via une URL HTTP, pas un chemin disque).
 uploads_root = os.path.join(DATA_DIR, "uploads")
 app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 
-# 2. Le frontend HTML/JS est servi à la racine /. Ainsi l'utilisateur
-#    ouvre simplement http://127.0.0.1:8000/ pour voir le dashboard.
-#    'html=True' fait que / sert automatiquement index.html.
-if os.path.isdir(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True),
-              name="frontend")
-else:
-    logger.warning(f"Dossier frontend introuvable : {FRONTEND_DIR}")
+# 2. L'interface NiceGUI est définie dans frontend/ui.py et s'attache
+#    au MEME FastAPI 'app'. Donc tout tourne sur le meme port :
+#    - http://127.0.0.1:8000/       -> dashboard NiceGUI
+#    - http://127.0.0.1:8000/api/v1 -> endpoints REST (utilises par la macro)
+#    - http://127.0.0.1:8000/uploads/... -> fichiers statiques
+import sys
+FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, "../../frontend"))
+if FRONTEND_DIR not in sys.path:
+    sys.path.insert(0, FRONTEND_DIR)
+
+try:
+    # ui_module enregistre ses pages sur 'app' via @ui.page(...) et
+    # appelle ui.run_with(app) pour brancher NiceGUI sur FastAPI.
+    import ui as ui_module  # noqa: F401  (l'import suffit a tout enregistrer)
+    logger.info("Interface NiceGUI chargee.")
+except ImportError as e:
+    logger.warning(f"Impossible de charger l'UI NiceGUI : {e}")
 
 
 # uvicorn main:app --reload --host 0.0.0.0 --port 8000
