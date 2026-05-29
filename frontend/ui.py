@@ -26,6 +26,14 @@ def _db():
     return main.engine, main.Parts, main.PLM, main.Stock, main.DATA_DIR
 
 
+def _db_project():
+    """Helper dedie aux projets : renvoie engine + classe Project +
+    fonction de generation du prochain code. On garde un helper distinct
+    pour ne pas casser la signature de _db() utilisee partout ailleurs."""
+    import main
+    return main.engine, main.Project, main._next_project_code
+
+
 # ======================================================================
 #  ACCES BASE DE DONNEES
 # ======================================================================
@@ -107,37 +115,43 @@ def create_part_in_db(part_name: str):
         return (True, f"Pièce '{part_name}' créée (id={part.id}).", part.id)
 
 
-def save_stock_photo(part_id: int, source_path: str, original_filename: str):
-    """Copie le fichier upload vers data-pistock/uploads/img/ et met
-    a jour (ou cree) la ligne stock. Retourne (ok, message)."""
-    engine, Parts, _, Stock, DATA_DIR = _db()
+# ----------------------------------------------------------------------
+#  PROJETS
+# ----------------------------------------------------------------------
+def fetch_projects():
+    """Liste tous les projets, tries par code croissant."""
+    engine, Project, _ = _db_project()
     with Session(engine) as session:
-        part = session.get(Parts, part_id)
-        if part is None:
-            return (False, f"Aucune pièce avec l'id {part_id}.")
+        projects = session.exec(
+            select(Project).order_by(Project.code)
+        ).all()
+        return [
+            {"id": p.id, "code": p.code, "description": p.description}
+            for p in projects
+        ]
 
-        ts_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        _, ext = os.path.splitext(original_filename or "")
-        if not ext:
-            ext = ".jpg"
-        stamped_name = f"stock_{part_id}_{ts_tag}{ext}"
-        dest_dir = os.path.join(DATA_DIR, "uploads", "img")
-        os.makedirs(dest_dir, exist_ok=True)
-        dest_path = os.path.join(dest_dir, stamped_name)
-        shutil.copyfile(source_path, dest_path)
-        rel_path = f"uploads/img/{stamped_name}"
 
-        stock_row = session.exec(
-            select(Stock).where(Stock.id_parts == part_id)
-        ).first()
-        if stock_row is None:
-            stock_row = Stock(id_parts=part_id, path_2_img=rel_path)
-            session.add(stock_row)
-        else:
-            stock_row.path_2_img = rel_path
-            session.add(stock_row)
+def create_project_in_db(description: str):
+    """Cree un projet avec code auto-genere. Retourne (ok, msg, code)."""
+    engine, Project, next_project_code = _db_project()
+    description = (description or "").strip() or None
+    with Session(engine) as session:
+        try:
+            code = next_project_code(session)
+        except Exception as e:
+            # Cas extreme : ZZZ atteint (HTTPException levee par main)
+            return (False, str(e), None)
+        project = Project(code=code, description=description)
+        session.add(project)
         session.commit()
-        return (True, "Photo de stock enregistrée.")
+        session.refresh(project)
+        return (True, f"Projet '{code}' créé.", code)
+
+
+# Note : la sauvegarde des photos de stock se fait via l'endpoint REST
+# POST /api/v1/parts/{id}/stock-photo dans main.py, appele directement
+# par le JS du navigateur (fetch). On n'a pas besoin d'une version
+# Python ici, ce qui evite aussi de dupliquer la logique de chemins.
 
 
 # ======================================================================
@@ -147,6 +161,48 @@ def save_stock_photo(part_id: int, source_path: str, original_filename: str):
 def dashboard_page():
     """Page principale : liste des pieces sous forme de cartes."""
 
+    # JavaScript injecte au <head> de la page. Comme NiceGUI 3.x
+    # sanitise le contenu de ui.html() et RETIRE les attributs 'on*'
+    # (onchange, onclick...), on ne peut pas mettre onchange="..."
+    # inline. A la place : event delegation. Un seul listener attache
+    # au document detecte tous les change sur les inputs portant
+    # data-stock-upload="{part_id}" et fait l'upload.
+    ui.add_head_html('''
+        <script>
+        // Garde-fou : n'installe le listener qu'une seule fois
+        if (!window._stockUploadInstalled) {
+            window._stockUploadInstalled = true;
+            document.addEventListener('change', async function(e) {
+                // Filtre : on ne traite que nos inputs marques
+                if (!e.target || !e.target.matches('input[data-stock-upload]')) {
+                    return;
+                }
+                const partId = e.target.dataset.stockUpload;
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const formData = new FormData();
+                formData.append("photo", file);
+                try {
+                    const response = await fetch(
+                        `/api/v1/parts/${partId}/stock-photo`,
+                        { method: "POST", body: formData }
+                    );
+                    if (!response.ok) {
+                        const err = await response.json().catch(() => ({}));
+                        alert("Erreur upload : " + (err.detail || response.status));
+                        return;
+                    }
+                    // Rafraichit la page pour faire apparaitre la nouvelle photo.
+                    window.location.reload();
+                } catch (err) {
+                    alert("Erreur : " + err.message);
+                }
+            });
+        }
+        </script>
+    ''')
+
     # En-tete sombre, comme dans la version HTML
     with ui.header().classes("bg-stone-800 text-white shadow"):
         ui.label("📦 PiStock — Catalogue").classes("text-xl font-medium")
@@ -154,8 +210,12 @@ def dashboard_page():
     # Conteneur principal centre, largeur max
     with ui.column().classes("w-full max-w-5xl mx-auto p-4 gap-4"):
 
-        # Barre d'actions : bouton "Nouvelle piece" a droite
-        with ui.row().classes("w-full justify-end"):
+        # Barre d'actions : boutons "Projet" et "Nouvelle piece" a droite.
+        # 'Projet' ouvre un dialogue de gestion des projets ; "Nouvelle
+        # piece" cree une piece directement.
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Projet", on_click=lambda: open_projects_dialog()) \
+                .props("color=primary outline").classes("text-base")
             ui.button("+ Nouvelle pièce", on_click=lambda: open_new_part_dialog()) \
                 .props("color=primary").classes("text-base")
 
@@ -215,6 +275,110 @@ def dashboard_page():
             error_label.text = ""
             new_part_dialog.open()
 
+        # --- Dialogue "Projets" ---------------------------------------
+        # Liste les projets existants + formulaire de creation inline
+        # (revelable). Le code (AAA, AAB...) est genere par le serveur,
+        # l'utilisateur saisit juste la description.
+        with ui.dialog() as projects_dialog, \
+                ui.card().classes("min-w-[480px] max-w-[600px]"):
+            ui.label("Projets").classes("text-lg font-medium")
+
+            # Conteneur scrollable pour la liste des projets.
+            # Vide puis rempli par refresh_projects_list().
+            projects_list_container = ui.column() \
+                .classes("w-full gap-2 max-h-[400px] overflow-y-auto")
+
+            # Formulaire de creation, masque par defaut.
+            with ui.column().classes("w-full gap-2 mt-2") as creation_form:
+                ui.label("Nouveau projet").classes("text-sm font-medium")
+                desc_input = ui.textarea(
+                    placeholder="Description (optionnelle)") \
+                    .classes("w-full").props("autogrow rows=3")
+                proj_error = ui.label("") \
+                    .classes("text-red-600 text-sm min-h-[1.2em]")
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button("Annuler",
+                              on_click=lambda: hide_creation_form()) \
+                        .props("flat")
+                    ui.button("Créer",
+                              on_click=lambda: confirm_create_project()) \
+                        .props("color=primary")
+            creation_form.set_visibility(False)
+
+            # Boutons du pied : "+ Nouveau projet" + "Fermer"
+            with ui.row().classes("w-full justify-between gap-2 mt-2") \
+                    as footer_row:
+                add_btn = ui.button("+ Nouveau projet",
+                                     on_click=lambda: show_creation_form()) \
+                    .props("color=primary outline")
+                ui.button("Fermer", on_click=projects_dialog.close) \
+                    .props("flat")
+
+            def refresh_projects_list():
+                """Vide puis re-rempli la liste depuis la base."""
+                projects_list_container.clear()
+                projects = fetch_projects()
+                if not projects:
+                    with projects_list_container:
+                        ui.label("Aucun projet pour l'instant. "
+                                 "Cliquez sur « + Nouveau projet » "
+                                 "pour en créer un.") \
+                            .classes("text-gray-500 text-sm text-center p-4")
+                    return
+                for proj in projects:
+                    with projects_list_container:
+                        with ui.card().classes("w-full p-3"):
+                            with ui.row().classes("items-start gap-3 no-wrap"):
+                                # Code en grosse pastille
+                                ui.label(proj["code"]) \
+                                    .classes("text-lg font-mono font-bold "
+                                              "text-blue-700 bg-blue-50 "
+                                              "px-2 py-1 rounded "
+                                              "flex-shrink-0")
+                                # Description (ou italique si vide)
+                                desc = proj["description"]
+                                if desc:
+                                    ui.label(desc) \
+                                        .classes("text-sm text-stone-700 "
+                                                  "whitespace-pre-wrap "
+                                                  "flex-grow")
+                                else:
+                                    ui.label("(aucune description)") \
+                                        .classes("text-sm text-gray-400 "
+                                                  "italic flex-grow")
+
+            def show_creation_form():
+                desc_input.value = ""
+                proj_error.text = ""
+                creation_form.set_visibility(True)
+                add_btn.set_visibility(False)
+
+            def hide_creation_form():
+                creation_form.set_visibility(False)
+                add_btn.set_visibility(True)
+
+            def confirm_create_project():
+                ok, msg, code = create_project_in_db(desc_input.value or "")
+                if not ok:
+                    proj_error.text = msg
+                    return
+                proj_error.text = ""
+                ui.notify(msg, type="positive")
+                hide_creation_form()
+                refresh_projects_list()
+
+        def open_projects_dialog():
+            # On rafraichit a chaque ouverture (au cas ou un autre
+            # onglet/utilisateur aurait ajoute des projets entre-temps).
+            hide_creation_form_silently()
+            refresh_projects_list()
+            projects_dialog.open()
+
+        def hide_creation_form_silently():
+            """Reset l'etat du formulaire sans notification."""
+            creation_form.set_visibility(False)
+            add_btn.set_visibility(True)
+
 
 # ======================================================================
 #  RENDU D'UNE LIGNE
@@ -266,60 +430,56 @@ def render_part_row(part: dict, on_change):
 
 
 def render_stock_photo_cell(part: dict, on_change):
-    """Cellule de la photo de stock : image + lien "Remplacer", ou
-    bouton "Ajouter" si pas encore de photo. Utilise ui.upload pour
-    declencher l'upload silencieusement."""
+    """Cellule de la photo de stock : image + bouton "Remplacer", ou
+    gros bouton dashed "Ajouter" si pas encore de photo.
+
+    APPROCHE : on utilise du HTML pur via ui.html() avec un <label>
+    qui contient un <input type="file"> cache. Cliquer sur le label
+    declenche le file picker natif (comportement HTML standard, marche
+    partout). L'upload est ensuite poste via fetch() vers l'endpoint
+    REST /api/v1/parts/{id}/stock-photo. Cette approche est plus fiable
+    que ui.upload + pickFiles et permet un controle stylistique total.
+    Le JS 'uploadStockPhoto' est defini dans le <head> de la page."""
 
     part_id = part["id"]
+    # 'on_change' n'est plus utilise ici : le rafraichissement se
+    # fait cote navigateur via window.location.reload() apres l'upload.
+    # On garde le parametre pour compatibilite avec l'appel existant.
+    _ = on_change
 
-    def handle_upload(e: events.UploadEventArguments):
-        # NiceGUI nous donne un objet fichier-like. On le copie vers
-        # un fichier temporaire avant de le passer a save_stock_photo
-        # (qui attend un chemin disque).
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            shutil.copyfileobj(e.content, tmp)
-            tmp_path = tmp.name
-        try:
-            ok, msg = save_stock_photo(part_id, tmp_path, e.name)
-            if ok:
-                ui.notify(msg, type="positive")
-                on_change()
-            else:
-                ui.notify(msg, type="negative")
-        finally:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-    with ui.column().classes("items-center gap-1 flex-shrink-0"):
-        if part["stock_img_url"]:
-            # Photo existante : on l'affiche + petit bouton "Remplacer"
-            with ui.element("div").classes(
-                    "w-20 h-20 bg-stone-100 rounded-lg flex items-center "
-                    "justify-center overflow-hidden"):
-                ui.image(part["stock_img_url"]) \
-                    .classes("w-full h-full object-contain")
-            # ui.upload masque le bouton natif et expose un trigger
-            up = ui.upload(on_upload=handle_upload, auto_upload=True,
-                            max_files=1) \
-                .props('accept="image/*"').classes("hidden")
-            ui.button("Remplacer", on_click=lambda: up.run_method("pickFiles")) \
-                .props("flat dense color=primary").classes("text-xs")
-        else:
-            # Pas de photo : gros bouton d'ajout style "dashed"
-            up = ui.upload(on_upload=handle_upload, auto_upload=True,
-                            max_files=1) \
-                .props('accept="image/*"').classes("hidden")
-            with ui.button(on_click=lambda: up.run_method("pickFiles")) \
-                    .props("flat") \
-                    .classes("w-20 h-20 border-2 border-dashed "
-                              "border-stone-300 rounded-lg hover:border-blue-500 "
-                              "hover:text-blue-500 text-stone-500"):
-                with ui.column().classes("items-center gap-0"):
-                    ui.label("📷").classes("text-xl")
-                    ui.label("Ajouter").classes("text-xs")
+    if part["stock_img_url"]:
+        # Photo existante : on l'affiche, avec un petit lien "Remplacer"
+        # en dessous (label sur un input file cache).
+        # data-stock-upload="{id}" : detecte par le listener global.
+        ui.html(f'''
+            <div class="flex flex-col items-center gap-1 flex-shrink-0">
+                <div class="w-20 h-20 bg-stone-100 rounded-lg flex items-center justify-center overflow-hidden">
+                    <img src="{part["stock_img_url"]}"
+                         alt="Photo stock"
+                         class="w-full h-full object-contain">
+                </div>
+                <label class="text-xs text-blue-600 cursor-pointer hover:underline">
+                    Remplacer
+                    <input type="file" accept="image/*" style="display:none"
+                           data-stock-upload="{part_id}">
+                </label>
+            </div>
+        ''')
+    else:
+        # Pas de photo : gros bouton dashed avec emoji et "Ajouter"
+        ui.html(f'''
+            <label class="cursor-pointer flex-shrink-0" title="Ajouter une photo de la pièce en stock">
+                <div class="w-20 h-20 border-2 border-dashed border-stone-300 rounded-lg
+                            flex flex-col items-center justify-center gap-0
+                            text-stone-500 transition
+                            hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50">
+                    <span class="text-2xl leading-none">📷</span>
+                    <span class="text-xs mt-1">Ajouter</span>
+                </div>
+                <input type="file" accept="image/*" style="display:none"
+                       data-stock-upload="{part_id}">
+            </label>
+        ''')
 
 
 # ======================================================================

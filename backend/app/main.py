@@ -59,10 +59,102 @@ class Stock(SQLModel, table=True):
     supply: str | None = None
 
 
+class Project(SQLModel, table=True):
+    __tablename__ = "project"
+    id: int | None = Field(default=None, primary_key=True)
+    # Code alphabetique a 3 lettres (AAA, AAB...), incremente
+    # automatiquement par le serveur. Unique : sert d'identifiant
+    # lisible pour l'utilisateur.
+    code: str = Field(index=True, unique=True, max_length=3)
+    description: str | None = None
+
+
+# ----------------------------------------------------------------------
+#  HELPERS GENERATION DU CODE PROJET
+# ----------------------------------------------------------------------
+# Le code projet est un "nombre" en base 26 sur 3 positions :
+#   AAA = 0, AAB = 1, ..., AAZ = 25, ABA = 26, ..., ZZZ = 17575.
+# On le manipule comme un entier pour l'incrementer, puis on le
+# reconvertit en chaine. Cette approche est plus robuste qu'une
+# manipulation caractere par caractere avec gestion des retenues.
+PROJECT_CODE_MAX = 26 ** 3 - 1  # = 17575 -> "ZZZ"
+
+
+def _code_to_int(code: str) -> int:
+    """Convertit 'AAA'->0, 'AAB'->1, ..., 'ZZZ'->17575."""
+    return ((ord(code[0]) - ord("A")) * 676
+            + (ord(code[1]) - ord("A")) * 26
+            + (ord(code[2]) - ord("A")))
+
+
+def _int_to_code(n: int) -> str:
+    """Inverse de _code_to_int. n doit etre dans [0, 17575]."""
+    return (chr(ord("A") + n // 676)
+            + chr(ord("A") + (n // 26) % 26)
+            + chr(ord("A") + n % 26))
+
+
+def _next_project_code(session: Session) -> str:
+    """Calcule le prochain code disponible. Si aucun projet n'existe
+    encore : 'AAA'. Sinon : (max existant) + 1. Leve HTTPException si
+    on depasse 'ZZZ' (limite tres haute en pratique : 17576 projets)."""
+    # Comme tous les codes ont 3 caracteres A-Z, l'ordre alphabetique
+    # coincide avec l'ordre numerique : un simple MAX(code) suffit.
+    last = session.exec(
+        select(Project.code).order_by(Project.code.desc()).limit(1)
+    ).first()
+    if last is None:
+        return "AAA"
+    next_n = _code_to_int(last) + 1
+    if next_n > PROJECT_CODE_MAX:
+        raise HTTPException(
+            status_code=507,  # 507 Insufficient Storage
+            detail="Limite de codes projet atteinte (ZZZ)."
+        )
+    return _int_to_code(next_n)
+
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
     logger.info("Base de donnees initialisee.")
+
+
+# ----------------------------------------------------------------------
+#  ENDPOINTS API : PROJETS
+# ----------------------------------------------------------------------
+@app.get("/api/v1/projects")
+def list_projects():
+    """Liste de tous les projets, tries par code croissant."""
+    with Session(engine) as session:
+        projects = session.exec(
+            select(Project).order_by(Project.code)
+        ).all()
+        return [
+            {"id": p.id, "code": p.code, "description": p.description}
+            for p in projects
+        ]
+
+
+@app.post("/api/v1/projects")
+def create_project(description: str = Form(default="")):
+    """Cree un nouveau projet avec un code auto-genere.
+    L'utilisateur fournit seulement la description (optionnelle) ;
+    le code est calcule par le serveur (AAA, AAB, ...)."""
+    description = (description or "").strip() or None
+    with Session(engine) as session:
+        code = _next_project_code(session)
+        project = Project(code=code, description=description)
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        logger.info(f"Projet '{code}' cree (id={project.id}).")
+        return {
+            "status": "success",
+            "id": project.id,
+            "code": project.code,
+            "description": project.description,
+        }
 
 
 # ----------------------------------------------------------------------
@@ -203,18 +295,21 @@ async def upload_stock_photo(part_id: int, photo: UploadFile = File(...)):
             raise HTTPException(status_code=404,
                                 detail=f"Aucune pièce avec l'id {part_id}.")
 
-        # Sauvegarde du fichier sur disque
+        # Sauvegarde du fichier sur disque dans uploads/stkimg/.
+        # Ce dossier est dedie aux photos de pieces "en stock" (prises
+        # au telephone, scannees, etc.), distinct de uploads/img/ qui
+        # contient les vignettes CAO generees par FreeCAD.
         ts_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         _, ext = os.path.splitext(photo.filename or "")
         if not ext:
             ext = ".jpg"  # fallback raisonnable
         stamped_name = f"stock_{part_id}_{ts_tag}{ext}"
-        dest_dir = os.path.join(DATA_DIR, "uploads", "img")
+        dest_dir = os.path.join(DATA_DIR, "uploads", "stkimg")
         os.makedirs(dest_dir, exist_ok=True)
         file_path = os.path.join(dest_dir, stamped_name)
         with open(file_path, "wb") as buffer:
             copyfileobj(photo.file, buffer)
-        rel_path = f"uploads/img/{stamped_name}"
+        rel_path = f"uploads/stkimg/{stamped_name}"
         logger.info(f"Photo stock sauvegardée : {file_path}")
 
         # Mise a jour (ou creation) de la ligne stock

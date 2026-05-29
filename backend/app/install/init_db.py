@@ -17,7 +17,8 @@ def setup_pistock_environment():
     sub_dirs = [
         os.path.join(uploads_dir, "cad"),
         os.path.join(uploads_dir, "img"),
-        os.path.join(uploads_dir, "doc")
+        os.path.join(uploads_dir, "doc"),
+        os.path.join(uploads_dir, "stkimg"),  # photos de stock (prises au telephone, etc.)
     ]
 
     # 2. Create the directories if they don't exist
@@ -62,6 +63,16 @@ def setup_pistock_environment():
         quantity: int = Field(default=0)
         location: str | None = Field(default=None)
         supply: str | None = Field(default=None)
+
+    class Project(SQLModel, table=True):
+        __tablename__ = "project"
+        id: int | None = Field(default=None, primary_key=True)
+        # Code alphabetique a 3 lettres majuscules, incremental :
+        # AAA, AAB, ..., AAZ, ABA, ..., ZZZ. Unique car il sert
+        # d'identifiant lisible (visible dans l'UI).
+        code: str = Field(index=True, unique=True, max_length=3)
+        # Description libre, multi-lignes. Optionnelle.
+        description: str | None = Field(default=None)
 
     # 4. Initialize SQLite Database Engine
     db_path = os.path.join(data_dir, "pistockdatabase.sqlite3")
