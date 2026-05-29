@@ -157,6 +157,55 @@ def toggle_part_lock_db(part_id: int):
                 part.locked)
 
 
+# ----------------------------------------------------------------------
+#  STOCK : helpers DB
+# ----------------------------------------------------------------------
+def fetch_stock(part_id: int):
+    """Renvoie les infos stock courantes. Si pas de ligne, valeurs
+    par defaut (quantity=0, le reste a None)."""
+    engine, _, _, Stock_cls, _ = _db()
+    with Session(engine) as session:
+        row = session.exec(
+            select(Stock_cls).where(Stock_cls.id_parts == part_id)
+        ).first()
+        if row is None:
+            return {"quantity": 0, "location": None, "supply": None,
+                    "doc_url": None}
+        return {
+            "quantity": row.quantity,
+            "location": row.location,
+            "supply": row.supply,
+            "doc_url": (f"/{row.path_2_doc}" if row.path_2_doc else None),
+        }
+
+
+def save_stock(part_id: int, quantity: int,
+                location: str | None, supply: str | None):
+    """Sauve les infos stock. Cree la ligne si elle n'existe pas.
+    Le verrou ne s'applique pas : stock = info operationnelle."""
+    if quantity is None or quantity < 0:
+        return (False, "La quantité doit être un entier positif ou nul.")
+    location = (location or "").strip() or None
+    supply = (supply or "").strip() or None
+
+    engine, Parts_cls, _, Stock_cls, _ = _db()
+    with Session(engine) as session:
+        if session.get(Parts_cls, part_id) is None:
+            return (False, "Pièce introuvable.")
+        row = session.exec(
+            select(Stock_cls).where(Stock_cls.id_parts == part_id)
+        ).first()
+        if row is None:
+            row = Stock_cls(id_parts=part_id)
+            session.add(row)
+        row.quantity = int(quantity)
+        row.location = location
+        row.supply = supply
+        session.add(row)
+        session.commit()
+        return (True, "Stock mis à jour.")
+
+
 def fetch_part_detail(part_id: int):
     """Detail d'une piece pour la page viewer 3D."""
     engine, Parts, PLM, _, _ = _db()
@@ -256,18 +305,20 @@ def dashboard_page():
     # data-stock-upload="{part_id}" et fait l'upload.
     ui.add_head_html('''
         <script>
-        // Garde-fou : n'installe le listener qu'une seule fois
+        // Garde-fou : n'installe les listeners qu'une seule fois
         if (!window._stockUploadInstalled) {
             window._stockUploadInstalled = true;
+
+            // ---- Listener pour les PHOTOS de stock ----
+            // Cible : input[data-stock-upload="{part_id}"]
+            // Endpoint : POST /api/v1/parts/{id}/stock-photo
             document.addEventListener('change', async function(e) {
-                // Filtre : on ne traite que nos inputs marques
                 if (!e.target || !e.target.matches('input[data-stock-upload]')) {
                     return;
                 }
                 const partId = e.target.dataset.stockUpload;
                 const file = e.target.files[0];
                 if (!file) return;
-
                 const formData = new FormData();
                 formData.append("photo", file);
                 try {
@@ -280,7 +331,34 @@ def dashboard_page():
                         alert("Erreur upload : " + (err.detail || response.status));
                         return;
                     }
-                    // Rafraichit la page pour faire apparaitre la nouvelle photo.
+                    window.location.reload();
+                } catch (err) {
+                    alert("Erreur : " + err.message);
+                }
+            });
+
+            // ---- Listener pour les FICHES COMPOSANT (doc) ----
+            // Cible : input[data-stock-doc="{part_id}"]
+            // Endpoint : POST /api/v1/parts/{id}/stock-doc
+            document.addEventListener('change', async function(e) {
+                if (!e.target || !e.target.matches('input[data-stock-doc]')) {
+                    return;
+                }
+                const partId = e.target.dataset.stockDoc;
+                const file = e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append("doc", file);
+                try {
+                    const response = await fetch(
+                        `/api/v1/parts/${partId}/stock-doc`,
+                        { method: "POST", body: formData }
+                    );
+                    if (!response.ok) {
+                        const err = await response.json().catch(() => ({}));
+                        alert("Erreur upload fiche : " + (err.detail || response.status));
+                        return;
+                    }
                     window.location.reload();
                 } catch (err) {
                     alert("Erreur : " + err.message);
@@ -634,6 +712,17 @@ def render_part_row(part: dict, on_change):
             ui.label(loc_text) \
                 .classes(f"text-sm {loc_color} w-32 flex-shrink-0")
 
+            # --- Bouton stock (icone "inventory", a droite) --------
+            # Ouvre un dialogue d'edition (quantite, location, supply,
+            # fiche composant). Le verrou ne s'applique pas au stock.
+            def make_open_stock(p=part):
+                return lambda: open_stock_dialog(p, on_change)
+            ui.button(icon="inventory_2",
+                       on_click=make_open_stock()) \
+                .props("flat round dense color=primary") \
+                .classes("flex-shrink-0") \
+                .tooltip("Gérer le stock")
+
 
 def render_stock_photo_cell(part: dict, on_change):
     """Cellule de la photo de stock : image + bouton "Remplacer", ou
@@ -884,6 +973,105 @@ def open_assign_project_dialog(part: dict, on_change):
                 ui.notify(msg2, type="negative")
 
         render_options()
+        dialog.open()
+
+
+# ======================================================================
+#  DIALOGUE : EDITION DU STOCK D'UNE PIECE
+# ======================================================================
+# Ouvre un dialogue avec : quantite (number), location (input), supply
+# (textarea), et un bouton d'upload de fiche composant. La fiche
+# uploadee va dans /data-pistock/uploads/doc/ via l'endpoint REST
+# /api/v1/parts/{id}/stock-doc (cf. JS listener "data-stock-doc").
+def open_stock_dialog(part: dict, on_change):
+    part_id = part["id"]
+    part_name = part["part_name"]
+    # Etat courant lu depuis la base (le 'part' passe peut etre stale
+    # si le user a modifie le stock dans un autre onglet).
+    stock = fetch_stock(part_id)
+
+    with ui.dialog() as dialog, ui.card().classes("min-w-[480px] max-w-[600px]"):
+        ui.label(f"Stock — « {part_name} »") \
+            .classes("text-lg font-medium")
+
+        # --- Champs editables -----------------------------------------
+        qty_input = ui.number(label="Quantité",
+                               value=stock["quantity"] or 0,
+                               min=0, step=1, format="%d") \
+            .classes("w-full")
+        loc_input = ui.input(label="Location",
+                              value=stock["location"] or "",
+                              placeholder="ex: Tiroir A3, étagère 2") \
+            .classes("w-full")
+        supply_input = ui.textarea(
+                label="Supply",
+                value=stock["supply"] or "",
+                placeholder="URL d'approvisionnement, fournisseur, "
+                            "notes...") \
+            .classes("w-full").props("autogrow rows=3")
+
+        # --- Fiche composant -----------------------------------------
+        # Si une fiche existe deja, on affiche un lien pour la
+        # consulter. Le bouton "Choisir un fichier" ouvre le file
+        # picker et l'upload se declenche automatiquement via le
+        # listener JS global (data-stock-doc).
+        with ui.column().classes("w-full mt-2"):
+            ui.label("Fiche composant").classes("text-sm text-gray-600")
+            doc_url = stock["doc_url"]
+            if doc_url:
+                # Lien vers la fiche actuelle (extrait juste le nom
+                # affiche en retirant le repertoire et le prefixe).
+                doc_name = doc_url.split("/")[-1]
+                # On retire le suffixe _YYYYMMDD_HHMMSS pour l'affichage
+                import re
+                display_name = re.sub(r"_\d{8}_\d{6}", "", doc_name)
+                with ui.row().classes("items-center gap-2"):
+                    ui.html(
+                        f'<a href="{doc_url}" target="_blank" '
+                        f'class="text-blue-600 hover:underline text-sm">'
+                        f'📄 {display_name}</a>'
+                    )
+                replace_label_text = "Remplacer la fiche"
+            else:
+                ui.label("(aucune fiche enregistrée)") \
+                    .classes("text-sm text-gray-400 italic")
+                replace_label_text = "Choisir un fichier"
+
+            # Bouton d'upload : meme approche que pour les photos de
+            # stock (HTML <label> + input cache, intercepte par le
+            # listener JS global).
+            ui.html(f'''
+                <label class="inline-flex items-center gap-2 cursor-pointer
+                              text-blue-600 hover:underline text-sm mt-1">
+                    <span>📎 {replace_label_text}</span>
+                    <input type="file"
+                           accept=".pdf,.doc,.docx,.txt,.md,image/*"
+                           style="display:none"
+                           data-stock-doc="{part_id}">
+                </label>
+            ''')
+
+        # --- Boutons OK / Annuler ------------------------------------
+        with ui.row().classes("w-full justify-end gap-2 mt-3"):
+            ui.button("Annuler", on_click=dialog.close).props("flat")
+            ui.button("Enregistrer",
+                      on_click=lambda: confirm_save()) \
+                .props("color=primary")
+
+        def confirm_save():
+            ok, msg = save_stock(
+                part_id,
+                int(qty_input.value or 0),
+                loc_input.value,
+                supply_input.value
+            )
+            if ok:
+                ui.notify(msg, type="positive")
+                dialog.close()
+                on_change()
+            else:
+                ui.notify(msg, type="negative")
+
         dialog.open()
 
 

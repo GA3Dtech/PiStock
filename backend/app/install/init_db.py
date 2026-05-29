@@ -69,6 +69,9 @@ def setup_pistock_environment():
         quantity: int = Field(default=0)
         location: str | None = Field(default=None)
         supply: str | None = Field(default=None)
+        # Chemin vers la fiche composant (PDF, datasheet...) stockee
+        # dans data-pistock/uploads/doc/.
+        path_2_doc: str | None = Field(default=None)
 
     class Project(SQLModel, table=True):
         __tablename__ = "project"

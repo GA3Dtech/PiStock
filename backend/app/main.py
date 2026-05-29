@@ -64,6 +64,8 @@ class Stock(SQLModel, table=True):
     quantity: int = Field(default=0)
     location: str | None = None
     supply: str | None = None
+    # Fiche composant (PDF, datasheet...) dans uploads/doc/
+    path_2_doc: str | None = None
 
 
 class Project(SQLModel, table=True):
@@ -278,6 +280,11 @@ def list_parts_full(project_code: str | None = None):
                 ),
                 "quantity": stock_row.quantity if stock_row else None,
                 "location": stock_row.location if stock_row else None,
+                "supply": stock_row.supply if stock_row else None,
+                "doc_url": (
+                    f"/{stock_row.path_2_doc}"
+                    if stock_row and stock_row.path_2_doc else None
+                ),
             })
         return result
 
@@ -446,6 +453,144 @@ def get_last_used_project():
         if project is None:
             return {"id": None, "code": None}
         return {"id": project.id, "code": project.code}
+
+
+# ----------------------------------------------------------------------
+#  ENDPOINTS STOCK (quantite, location, supply, fiche composant)
+# ----------------------------------------------------------------------
+# A noter : on NE verifie PAS le verrou ici. Le verrou protege le
+# design (projet, statut) ; le stock est de l'info operationnelle qu'on
+# doit pouvoir mettre a jour meme sur une piece "Asset" verrouillee.
+
+def _get_or_create_stock(session: Session, part_id: int) -> Stock:
+    """Renvoie la ligne stock pour cette piece, la cree si absente."""
+    stock_row = session.exec(
+        select(Stock).where(Stock.id_parts == part_id)
+    ).first()
+    if stock_row is None:
+        stock_row = Stock(id_parts=part_id)
+        session.add(stock_row)
+        session.flush()
+    return stock_row
+
+
+@app.get("/api/v1/parts/{part_id}/stock")
+def get_part_stock(part_id: int):
+    """Renvoie les infos de stock d'une piece. Si la ligne n'existe
+    pas encore, on renvoie des valeurs par defaut (quantity=0, le
+    reste a None) plutot que 404 : du point de vue de l'UI, toute
+    piece a un stock (eventuellement vide)."""
+    with Session(engine) as session:
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Pièce id={part_id} introuvable.")
+        stock_row = session.exec(
+            select(Stock).where(Stock.id_parts == part_id)
+        ).first()
+        if stock_row is None:
+            return {
+                "part_id": part_id,
+                "quantity": 0,
+                "location": None,
+                "supply": None,
+                "stock_img_url": None,
+                "doc_url": None,
+            }
+        return {
+            "part_id": part_id,
+            "quantity": stock_row.quantity,
+            "location": stock_row.location,
+            "supply": stock_row.supply,
+            "stock_img_url": (f"/{stock_row.path_2_img}"
+                               if stock_row.path_2_img else None),
+            "doc_url": (f"/{stock_row.path_2_doc}"
+                         if stock_row.path_2_doc else None),
+        }
+
+
+@app.post("/api/v1/parts/{part_id}/stock")
+def update_part_stock(
+    part_id: int,
+    quantity: int = Form(default=0),
+    location: str | None = Form(default=None),
+    supply: str | None = Form(default=None),
+):
+    """Met a jour les infos de stock (quantite, location, supply).
+    Cree la ligne stock si elle n'existe pas. Les chaines vides sont
+    converties en NULL pour la coherence en base."""
+    if quantity < 0:
+        raise HTTPException(status_code=400,
+                            detail="La quantité ne peut pas être négative.")
+
+    # Normalise : "" -> None
+    location = (location or "").strip() or None
+    supply = (supply or "").strip() or None
+
+    with Session(engine) as session:
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Pièce id={part_id} introuvable.")
+        stock_row = _get_or_create_stock(session, part_id)
+        stock_row.quantity = quantity
+        stock_row.location = location
+        stock_row.supply = supply
+        session.add(stock_row)
+        session.commit()
+        logger.info(f"Stock piece {part_id} : qty={quantity} "
+                    f"loc={location} supply={supply}")
+        return {
+            "status": "success",
+            "quantity": stock_row.quantity,
+            "location": stock_row.location,
+            "supply": stock_row.supply,
+        }
+
+
+@app.post("/api/v1/parts/{part_id}/stock-doc")
+async def upload_stock_doc(part_id: int, doc: UploadFile = File(...)):
+    """Upload (ou remplace) la fiche composant d'une piece. Le fichier
+    va dans data-pistock/uploads/doc/ avec un suffixe timestamp pour
+    eviter les collisions tout en gardant le nom original lisible."""
+    with Session(engine) as session:
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Pièce id={part_id} introuvable.")
+
+        # Nom final : "<basename>_<timestamp>.<ext>".
+        # On garde le nom d'origine pour l'identification visuelle.
+        ts_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        original = doc.filename or "fiche.pdf"
+        base, ext = os.path.splitext(original)
+        if not ext:
+            ext = ".pdf"
+        # Sanitisation legere du basename pour eviter les caracteres
+        # problematiques sur disque.
+        safe_base = "".join(c if c.isalnum() or c in "-_." else "_"
+                             for c in base) or "fiche"
+        stamped_name = f"{safe_base}_{ts_tag}{ext}"
+
+        dest_dir = os.path.join(DATA_DIR, "uploads", "doc")
+        os.makedirs(dest_dir, exist_ok=True)
+        file_path = os.path.join(dest_dir, stamped_name)
+        with open(file_path, "wb") as buffer:
+            copyfileobj(doc.file, buffer)
+        rel_path = f"uploads/doc/{stamped_name}"
+        logger.info(f"Fiche composant sauvegardee : {file_path}")
+
+        stock_row = _get_or_create_stock(session, part_id)
+        stock_row.path_2_doc = rel_path
+        session.add(stock_row)
+        session.commit()
+
+        return {
+            "status": "success",
+            "part_id": part_id,
+            "doc_url": f"/{rel_path}",
+            "filename": stamped_name,
+        }
 
 
 @app.post("/api/v1/parts/{part_id}/stock-photo")
