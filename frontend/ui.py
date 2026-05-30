@@ -733,6 +733,8 @@ def dashboard_page():
     # quoi que ce soit (les premiers appels a _() en dependent).
     _apply_user_lang()
     _register_pwa()
+    # Titre de l'onglet navigateur (visible dans la barre + historique)
+    ui.page_title(_("PiStock — Catalog"))
 
     # JavaScript injecte au <head> de la page. Comme NiceGUI 3.x
     # sanitise le contenu de ui.html() et RETIRE les attributs 'on*'
@@ -1442,6 +1444,9 @@ def part_page(part_id: int):
     _apply_user_lang()
     _register_pwa()
     part = fetch_part_detail(part_id)
+    # Titre d'onglet : "PiStock — Vue 3D : <nom de la piece>"
+    part_name = part["part_name"] if part else f"#{part_id}"
+    ui.page_title(f"{_('PiStock — 3D View')} : {part_name}")
 
     # Charger model-viewer (web component de Google, Apache 2.0).
     # On charge en LOCAL depuis /static/model-viewer.min.js, servi
@@ -2228,4 +2233,6 @@ def open_bom_edit_dialog(bom_id: int):
 # on le fournit par precaution meme si on ne s'en sert pas ici.
 import main as _main_module
 ui.run_with(_main_module.app,
+            title="PiStock",
+            favicon="📦",
             storage_secret="pistock-dev-secret-change-me")
