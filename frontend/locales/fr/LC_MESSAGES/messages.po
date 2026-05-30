@@ -1,0 +1,65 @@
+# PiStock — French translation
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: fr\n"
+
+msgid "PiStock — Catalog"
+msgstr "PiStock — Catalogue"
+
+msgid "PiStock — 3D View"
+msgstr "PiStock — Vue 3D"
+
+msgid "Source code (AGPLv3)"
+msgstr "Code source (AGPLv3)"
+
+msgid "Project"
+msgstr "Projet"
+
+msgid "+ New part"
+msgstr "+ Nouvelle pièce"
+
+msgid "+ New project"
+msgstr "+ Nouveau projet"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Create"
+msgstr "Créer"
+
+msgid "Save"
+msgstr "Enregistrer"
+
+msgid "Close"
+msgstr "Fermer"
+
+msgid "Delete"
+msgstr "Supprimer"
+
+msgid "Project:"
+msgstr "Projet :"
+
+msgid "All projects"
+msgstr "Tous les projets"
+
+msgid "(No project)"
+msgstr "(Sans projet)"
+
+msgid "Loading parts…"
+msgstr "Chargement des pièces…"
+
+msgid "No parts in the database yet. Click « + New part » or export one from FreeCAD."
+msgstr "Aucune pièce dans la base pour l'instant. Cliquez sur « + Nouvelle pièce » ou exportez-en une depuis FreeCAD."
+
+msgid "No parts for project '{code}'."
+msgstr "Aucune pièce pour le projet '{code}'."
+
+msgid "Revision history"
+msgstr "Historique des révisions"
+
+msgid "← Back to list"
+msgstr "← Retour à la liste"
+
+msgid "Language"
+msgstr "Langue"

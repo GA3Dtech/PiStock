@@ -38,6 +38,78 @@ API_UPLOAD = f"{API_BASE}/parts/upload"   # POST : envoi d'un export
 PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/PiStock"
 
 
+# ======================================================================
+#  I18N — squelette de traduction
+# ======================================================================
+# Memo systeme : dict {lang_code: {msgid: msgstr}}. Convention :
+# msgid en anglais. La langue active est lue depuis le profil FreeCAD
+# (meme PARAM_PATH que LastAuthor, clé "Language"). Pour ajouter une
+# chaine : wrapper avec tr("...") et completer 'fr' ci-dessous.
+TRANSLATIONS = {
+    "en": {},
+    "fr": {
+        # Titre dialog
+        "PiStock — Export to database": "PiStock — Export vers la base",
+        "Language:": "Langue :",
+        # Modes
+        "Create a new part": "Créer une nouvelle pièce",
+        "Associate to an existing part":
+            "Associer à une pièce existante",
+        # Labels champs
+        "    Name:": "    Nom :",
+        "    Project:": "    Projet :",
+        "    Part:": "    Pièce :",
+        "Author:": "Auteur :",
+        "All projects": "Tous les projets",
+        "(No project)": "(Sans projet)",
+        "{name} (locked)": "{name} (verrouillée)",
+        "(no part)": "(aucune pièce)",
+        # Validations
+        "Missing field": "Champ manquant",
+        "Please enter the author name.":
+            "Veuillez indiquer le nom de l'auteur.",
+        "Please enter a name for the new part.":
+            "Veuillez indiquer le nom de la nouvelle pièce.",
+        "No part": "Aucune pièce",
+        "No selectable part with this filter.":
+            "Aucune pièce sélectionnable avec ce filtre.",
+        "Locked part": "Pièce verrouillée",
+        "Part '{name}' is locked. Unlock it from the web interface before pushing a new revision.":
+            "La pièce '{name}' est verrouillée. Déverrouillez-la depuis l'interface web avant de pousser une nouvelle révision.",
+        # Notification changement de langue
+        "Language preference saved. The new language will be active at the next launch of this macro.":
+            "Préférence de langue enregistrée. La nouvelle langue sera active au prochain lancement de cette macro.",
+    },
+}
+
+
+def get_lang() -> str:
+    """Lit la preference langue depuis le profil FreeCAD."""
+    try:
+        params = App.ParamGet(PARAM_PATH)
+        lang = params.GetString("Language", "en")
+        return lang if lang in TRANSLATIONS else "en"
+    except Exception:
+        return "en"
+
+
+def set_lang(lang: str) -> None:
+    """Persiste la preference langue dans le profil FreeCAD."""
+    if lang not in TRANSLATIONS:
+        return
+    try:
+        params = App.ParamGet(PARAM_PATH)
+        params.SetString("Language", lang)
+    except Exception:
+        pass
+
+
+def tr(text: str) -> str:
+    """Traduit selon la langue active. Si pas de traduction, renvoie
+    la chaine source."""
+    return TRANSLATIONS.get(get_lang(), {}).get(text, text)
+
+
 # ----------------------------------------------------------------------
 #  MÉMORISATION DE L'AUTEUR (préférences FreeCAD)
 # ----------------------------------------------------------------------
@@ -105,7 +177,7 @@ class PiStockExportDialog(QtWidgets.QDialog):
     def __init__(self, default_part_name, existing_parts,
                  existing_projects, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("PiStock — Export vers la base")
+        self.setWindowTitle(tr("PiStock — Export to database"))
         self.setMinimumWidth(440)
 
         self.existing_parts = existing_parts        # [{id, part_name, id_project, project_code, locked}, ...]
@@ -117,17 +189,38 @@ class PiStockExportDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
 
+        # --- Sélecteur de langue (en haut à droite) -----------------
+        # Au changement, on persiste la nouvelle langue mais on
+        # AFFICHE UN MESSAGE plutot que de rebuilder le dialog en
+        # cours. Le rebuild complet d'un QDialog modal est complexe
+        # (binding des widgets a recreer) — message + relance par
+        # l'utilisateur est plus simple et fiable pour un squelette.
+        lang_row = QtWidgets.QHBoxLayout()
+        lang_row.addStretch()
+        lang_row.addWidget(QtWidgets.QLabel(tr("Language:")))
+        self.lang_combo = QtWidgets.QComboBox()
+        self.lang_combo.addItem("EN", "en")
+        self.lang_combo.addItem("FR", "fr")
+        current = get_lang()
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == current:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_change)
+        lang_row.addWidget(self.lang_combo)
+        layout.addLayout(lang_row)
+
         # --- Choix : nouvelle pièce OU pièce existante ---------------
-        self.radio_new = QtWidgets.QRadioButton("Créer une nouvelle pièce")
+        self.radio_new = QtWidgets.QRadioButton(tr("Create a new part"))
         self.radio_existing = QtWidgets.QRadioButton(
-            "Associer à une pièce existante"
+            tr("Associate to an existing part")
         )
         layout.addWidget(self.radio_new)
 
         # Champ nom de la nouvelle pièce (pré-rempli avec le doc FreeCAD)
         self.new_name_edit = QtWidgets.QLineEdit(default_part_name)
         new_name_row = QtWidgets.QHBoxLayout()
-        new_name_row.addWidget(QtWidgets.QLabel("    Nom :"))
+        new_name_row.addWidget(QtWidgets.QLabel(tr("    Name:")))
         new_name_row.addWidget(self.new_name_edit)
         layout.addLayout(new_name_row)
 
@@ -136,8 +229,8 @@ class PiStockExportDialog(QtWidgets.QDialog):
         # --- Filtre projet (nouveau) ---------------------------------
         # Permet de réduire la liste des pièces affichées en dessous.
         self.project_combo = QtWidgets.QComboBox()
-        self.project_combo.addItem("Tous les projets", self.PROJECT_ALL)
-        self.project_combo.addItem("(Sans projet)", self.PROJECT_NONE)
+        self.project_combo.addItem(tr("All projects"), self.PROJECT_ALL)
+        self.project_combo.addItem(tr("(No project)"), self.PROJECT_NONE)
         for proj in existing_projects:
             desc = proj.get("description") or ""
             label = f"{proj['code']}"
@@ -148,7 +241,7 @@ class PiStockExportDialog(QtWidgets.QDialog):
             # On stocke le CODE projet comme userData pour filtrer
             self.project_combo.addItem(label, proj["code"])
         project_row = QtWidgets.QHBoxLayout()
-        project_row.addWidget(QtWidgets.QLabel("    Projet :"))
+        project_row.addWidget(QtWidgets.QLabel(tr("    Project:")))
         project_row.addWidget(self.project_combo)
         layout.addLayout(project_row)
 
@@ -156,7 +249,7 @@ class PiStockExportDialog(QtWidgets.QDialog):
         # Rempli/filtré par _refresh_parts_combo() selon le projet choisi.
         self.existing_combo = QtWidgets.QComboBox()
         existing_row = QtWidgets.QHBoxLayout()
-        existing_row.addWidget(QtWidgets.QLabel("    Pièce :"))
+        existing_row.addWidget(QtWidgets.QLabel(tr("    Part:")))
         existing_row.addWidget(self.existing_combo)
         layout.addLayout(existing_row)
 
@@ -167,7 +260,7 @@ class PiStockExportDialog(QtWidgets.QDialog):
         # --- Champ auteur --------------------------------------------
         layout.addSpacing(8)
         author_row = QtWidgets.QHBoxLayout()
-        author_row.addWidget(QtWidgets.QLabel("Auteur :"))
+        author_row.addWidget(QtWidgets.QLabel(tr("Author:")))
         self.author_edit = QtWidgets.QLineEdit(get_remembered_author())
         author_row.addWidget(self.author_edit)
         layout.addLayout(author_row)
@@ -212,8 +305,8 @@ class PiStockExportDialog(QtWidgets.QDialog):
 
             locked = part.get("locked", False)
             # Label avec prefixe verrou si verrouillee
-            label = f"🔒 {part['part_name']} (verrouillée)" if locked \
-                else part["part_name"]
+            label = (f"🔒 " + tr("{name} (locked)").format(name=part['part_name'])
+                     if locked else part["part_name"])
             self.existing_combo.addItem(label, part["id"])
 
             # Desactiver l'item si la piece est verrouillee.
@@ -227,7 +320,7 @@ class PiStockExportDialog(QtWidgets.QDialog):
         # Si la liste resultante est vide (aucune piece pour ce filtre),
         # on l'indique a l'utilisateur via un item desactive.
         if self.existing_combo.count() == 0:
-            self.existing_combo.addItem("(aucune pièce)", None)
+            self.existing_combo.addItem(tr("(no part)"), None)
             item = self.existing_combo.model().item(0)
             if item is not None:
                 item.setEnabled(False)
@@ -245,8 +338,8 @@ class PiStockExportDialog(QtWidgets.QDialog):
         author = self.author_edit.text().strip()
         if not author:
             QtWidgets.QMessageBox.warning(
-                self, "Champ manquant",
-                "Veuillez indiquer le nom de l'auteur."
+                self, tr("Missing field"),
+                tr("Please enter the author name.")
             )
             return
         self.result_author = author
@@ -255,8 +348,8 @@ class PiStockExportDialog(QtWidgets.QDialog):
             name = self.new_name_edit.text().strip()
             if not name:
                 QtWidgets.QMessageBox.warning(
-                    self, "Champ manquant",
-                    "Veuillez indiquer le nom de la nouvelle pièce."
+                    self, tr("Missing field"),
+                    tr("Please enter a name for the new part.")
                 )
                 return
             self.result_part_name = name
@@ -267,8 +360,8 @@ class PiStockExportDialog(QtWidgets.QDialog):
             if chosen_id is None:
                 # Aucune piece selectionnable (filtre vide)
                 QtWidgets.QMessageBox.warning(
-                    self, "Aucune pièce",
-                    "Aucune pièce sélectionnable avec ce filtre."
+                    self, tr("No part"),
+                    tr("No selectable part with this filter.")
                 )
                 return
             # Double-check : si l'utilisateur a reussi a selectionner
@@ -277,16 +370,31 @@ class PiStockExportDialog(QtWidgets.QDialog):
                             if p["id"] == chosen_id), None)
             if chosen and chosen.get("locked"):
                 QtWidgets.QMessageBox.warning(
-                    self, "Pièce verrouillée",
-                    f"La pièce '{chosen['part_name']}' est verrouillée. "
-                    f"Déverrouillez-la depuis l'interface web avant "
-                    f"de pousser une nouvelle révision."
+                    self, tr("Locked part"),
+                    tr("Part '{name}' is locked. Unlock it from the "
+                       "web interface before pushing a new revision.").format(
+                        name=chosen['part_name'])
                 )
                 return
             self.result_part_id = chosen_id
             self.result_part_name = None
 
         self.accept()
+
+    def _on_lang_change(self):
+        """Persiste la langue choisie. Comme le dialog est modal et
+        deja construit, on n'essaie pas de tout rebuilder a chaud :
+        on previent l'utilisateur que la nouvelle langue sera active
+        au prochain lancement de la macro."""
+        new_lang = self.lang_combo.currentData()
+        if new_lang == get_lang():
+            return  # pas de changement effectif
+        set_lang(new_lang)
+        QtWidgets.QMessageBox.information(
+            self, tr("Language:"),
+            tr("Language preference saved. The new language will be "
+               "active at the next launch of this macro.")
+        )
 
 
 # ----------------------------------------------------------------------

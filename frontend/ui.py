@@ -29,8 +29,13 @@ import os
 import json
 import shutil
 from datetime import datetime, timezone
-from nicegui import ui, events
+from nicegui import ui, app, events
 from sqlmodel import Session, select
+
+# Module de traduction : voir i18n.py + locales/. Pour ajouter une
+# chaine traduisible : wrapper avec _("..."), puis ajouter la paire
+# msgid/msgstr dans locales/{lang}/LC_MESSAGES/messages.po.
+from i18n import _, set_lang, get_lang, AVAILABLE_LANGS
 
 # IMPORT TARDIF de main : on évite l'import circulaire en repoussant
 # la résolution à l'intérieur des fonctions. Au moment où main.py
@@ -52,14 +57,57 @@ def _db():
 SOURCE_CODE_URL = "https://github.com/GA3Dtech/PiStock"
 
 
-def render_app_header(title: str):
-    """En-tete commun aux pages : titre a gauche, lien vers le code
-    source a droite (obligation AGPLv3)."""
+def _apply_user_lang():
+    """Lit la langue choisie par l'utilisateur (stockee dans le
+    storage cote serveur, lie a un cookie de session) et l'applique
+    globalement pour la requete en cours. A appeler en TOUT DEBUT de
+    chaque @ui.page."""
+    try:
+        # On utilise app.storage.user et NON app.storage.browser :
+        # browser est un cookie signe dont la valeur est posee dans
+        # les headers HTTP, donc en lecture seule en dehors de la
+        # construction initiale de la reponse. user est cote serveur,
+        # modifiable de partout (event handlers compris).
+        lang = app.storage.user.get("lang", "en")
+    except Exception:
+        lang = "en"
+    set_lang(lang)
+
+
+def render_app_header(title_key: str):
+    """En-tete commun aux pages : titre a gauche, selecteur de langue
+    et lien vers le code source a droite (obligation AGPLv3).
+
+    'title_key' est un msgid qui sera traduit via _()."""
     with ui.header().classes("bg-stone-800 text-white shadow"):
-        with ui.row().classes("w-full items-center no-wrap"):
-            ui.label(title).classes("text-xl font-medium")
+        with ui.row().classes("w-full items-center no-wrap gap-3"):
+            ui.label(_(title_key)).classes("text-xl font-medium")
             ui.element("div").classes("flex-grow")  # spacer
-            ui.link("Code source (AGPLv3)",
+
+            # --- Selecteur de langue --------------------------------
+            # Toggle EN/FR. Au changement : on stocke la preference
+            # cote navigateur et on recharge la page pour appliquer.
+            current = get_lang()
+            lang_options = {code: code.upper()
+                             for code, _label in AVAILABLE_LANGS}
+
+            def on_lang_change(e):
+                new_lang = e.value
+                # app.storage.user (cote serveur) au lieu de
+                # app.storage.browser (cookie signe, read-only hors
+                # construction de reponse HTTP).
+                app.storage.user["lang"] = new_lang
+                # Reload pour reconstruire toute la page dans la
+                # nouvelle langue. Plus simple et fiable qu'un rebuild
+                # incremental qui demanderait de tracker tous les
+                # widgets contenant du texte.
+                ui.navigate.reload()
+
+            ui.toggle(lang_options, value=current,
+                       on_change=on_lang_change) \
+                .props("color=white dense").classes("text-sm")
+
+            ui.link(_("Source code (AGPLv3)"),
                     SOURCE_CODE_URL,
                     new_tab=True) \
                 .classes("text-stone-300 hover:text-white "
@@ -427,6 +475,9 @@ def create_project_in_db(description: str):
 @ui.page("/")
 def dashboard_page():
     """Page principale : liste des pieces sous forme de cartes."""
+    # Applique la langue choisie par l'utilisateur AVANT de construire
+    # quoi que ce soit (les premiers appels a _() en dependent).
+    _apply_user_lang()
 
     # JavaScript injecte au <head> de la page. Comme NiceGUI 3.x
     # sanitise le contenu de ui.html() et RETIRE les attributs 'on*'
@@ -500,19 +551,19 @@ def dashboard_page():
     ''')
 
     # En-tete sombre, comme dans la version HTML
-    render_app_header("📦 PiStock — Catalogue")
+    render_app_header("PiStock — Catalog")
 
     # Conteneur principal centre, largeur max
     with ui.column().classes("w-full max-w-5xl mx-auto p-4 gap-4"):
 
         # Barre d'actions : filtre projet a gauche, boutons a droite
         with ui.row().classes("w-full items-center gap-2"):
-            ui.label("Projet :").classes("text-sm text-gray-600")
+            ui.label(_("Project:")).classes("text-sm text-gray-600")
             # Le select est rempli dynamiquement (peut etre vide si
             # aucun projet existe encore). Initialise vide ici, peuple
             # par refresh_project_filter().
             project_filter = ui.select(
-                options={"": "Tous les projets"},
+                options={"": _("All projects")},
                 value="",
                 on_change=lambda _: refresh_list()
             ).classes("min-w-[200px]")
@@ -520,14 +571,14 @@ def dashboard_page():
             # Pousse les boutons a droite
             ui.element("div").classes("flex-grow")
 
-            ui.button("Projet", on_click=lambda: open_projects_dialog()) \
+            ui.button(_("Project"), on_click=lambda: open_projects_dialog()) \
                 .props("color=primary outline").classes("text-base")
-            ui.button("+ Nouvelle pièce", on_click=lambda: open_new_part_dialog()) \
+            ui.button(_("+ New part"), on_click=lambda: open_new_part_dialog()) \
                 .props("color=primary").classes("text-base")
 
         def refresh_project_filter():
             """Recharge les options du dropdown de filtre projet."""
-            options = {"": "Tous les projets"}
+            options = {"": _("All projects")}
             for proj in fetch_projects():
                 options[proj["code"]] = f"{proj['code']} — {proj['description'] or '(sans description)'}"
             # Conserver la valeur actuelle si elle est encore valide
@@ -914,6 +965,7 @@ def render_stock_photo_cell(part: dict, on_change):
 def part_page(part_id: int):
     """Page viewer 3D pour une piece donnee, avec liste des
     revisions PLM sous le viewer."""
+    _apply_user_lang()
     part = fetch_part_detail(part_id)
 
     # Charger model-viewer (web component de Google, Apache 2.0).
@@ -933,7 +985,7 @@ def part_page(part_id: int):
         </script>
     ''')
 
-    render_app_header("📦 PiStock — Vue 3D")
+    render_app_header("PiStock — 3D View")
 
     with ui.column().classes("w-full max-w-5xl mx-auto p-4 gap-4"):
 

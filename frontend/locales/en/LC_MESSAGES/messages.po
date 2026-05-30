@@ -1,0 +1,66 @@
+# PiStock — English translation (source language, msgid == msgstr)
+# This file documents available translatable strings.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+
+msgid "PiStock — Catalog"
+msgstr "PiStock — Catalog"
+
+msgid "PiStock — 3D View"
+msgstr "PiStock — 3D View"
+
+msgid "Source code (AGPLv3)"
+msgstr "Source code (AGPLv3)"
+
+msgid "Project"
+msgstr "Project"
+
+msgid "+ New part"
+msgstr "+ New part"
+
+msgid "+ New project"
+msgstr "+ New project"
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Create"
+msgstr "Create"
+
+msgid "Save"
+msgstr "Save"
+
+msgid "Close"
+msgstr "Close"
+
+msgid "Delete"
+msgstr "Delete"
+
+msgid "Project:"
+msgstr "Project:"
+
+msgid "All projects"
+msgstr "All projects"
+
+msgid "(No project)"
+msgstr "(No project)"
+
+msgid "Loading parts…"
+msgstr "Loading parts…"
+
+msgid "No parts in the database yet. Click « + New part » or export one from FreeCAD."
+msgstr "No parts in the database yet. Click « + New part » or export one from FreeCAD."
+
+msgid "No parts for project '{code}'."
+msgstr "No parts for project '{code}'."
+
+msgid "Revision history"
+msgstr "Revision history"
+
+msgid "← Back to list"
+msgstr "← Back to list"
+
+msgid "Language"
+msgstr "Language"

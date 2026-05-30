@@ -44,6 +44,90 @@ CARD_HEIGHT = 230
 THUMB_WIDTH = 160
 THUMB_HEIGHT = 110
 
+
+# ======================================================================
+#  I18N — squelette de traduction
+# ======================================================================
+# On garde volontairement simple : un dict par langue. Pour ajouter une
+# chaine traduisible, wrapper avec tr("...") et ajouter l'entree au
+# dict 'fr' ci-dessous. Convention : les CLES sont en anglais (idem
+# que le frontend NiceGUI / gettext). La langue par defaut est "en".
+#
+# La preference de langue est stockee dans le profil FreeCAD :
+#   User parameter:BaseApp/Preferences/Mod/PiStock -> Language
+# Au changement, refresh() reconstruit l'interface dans la nouvelle
+# langue (widget non-modal, donc rebuild facile).
+PISTOCK_PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/PiStock"
+
+TRANSLATIONS = {
+    "en": {},  # langue source — cle == valeur
+    "fr": {
+        # Header
+        "PiStock Explorer": "PiStock Explorer",
+        "Language:": "Langue :",
+        # Section "Nouveau fichier"
+        "New file": "Nouveau fichier",
+        "Parametric body": "Corps paramétrique",
+        "Create a body with the PartDesign workbench":
+            "Créer un corps avec l'atelier PartDesign",
+        "Assembly project": "Projet d'assemblage",
+        "Create an assembly project": "Créer un projet d'assemblage",
+        "Empty file": "Fichier vide",
+        "Create a new empty FreeCAD file":
+            "Créer un nouveau fichier FreeCAD vide",
+        "Open a file": "Ouvrir un fichier",
+        "Open an existing FreeCAD file":
+            "Ouvrir un fichier FreeCAD existant",
+        # Section "Pieces PiStock"
+        "PiStock parts": "Pièces PiStock",
+        "Project:": "Projet :",
+        "All projects": "Tous les projets",
+        "(No project)": "(Sans projet)",
+        "Refresh": "Actualiser",
+        "Loading…": "Chargement…",
+        "{n} part(s)": "{n} pièce(s)",
+        "No part": "Aucune pièce",
+        "No part matching this filter.\nUse the PiStock Exporter macro to publish from a document, or create a part manually via the web interface.":
+            "Aucune pièce correspondant à ce filtre.\nUtilisez la macro PiStock Exporter pour publier depuis un document, ou créez une pièce manuellement via l'interface web.",
+        "(no thumbnail)": "(pas de vignette)",
+        "locked": "verrouillée",
+        "No FreeCAD file associated to this part.":
+            "Aucun fichier FreeCAD associé à cette pièce.",
+        "Click to open «\u00a0{name}\u00a0»": "Cliquer pour ouvrir «\u00a0{name}\u00a0»",
+        # Erreurs
+        "PiStock — Error": "PiStock — Erreur",
+        "Cannot download «\u00a0{name}\u00a0» :\n{err}":
+            "Impossible de télécharger «\u00a0{name}\u00a0» :\n{err}",
+    },
+}
+
+
+def get_lang() -> str:
+    """Lit la preference langue depuis le profil FreeCAD."""
+    try:
+        params = App.ParamGet(PISTOCK_PARAM_PATH)
+        lang = params.GetString("Language", "en")
+        return lang if lang in TRANSLATIONS else "en"
+    except Exception:
+        return "en"
+
+
+def set_lang(lang: str) -> None:
+    """Persiste la preference langue dans le profil FreeCAD."""
+    if lang not in TRANSLATIONS:
+        return
+    try:
+        params = App.ParamGet(PISTOCK_PARAM_PATH)
+        params.SetString("Language", lang)
+    except Exception:
+        pass
+
+
+def tr(text: str) -> str:
+    """Traduit une chaine selon la langue active. Si pas de
+    traduction trouvee, renvoie le texte source (langue de reference)."""
+    return TRANSLATIONS.get(get_lang(), {}).get(text, text)
+
 # Mapping statut -> couleur de fond (cohérent avec le frontend NiceGUI)
 STATUS_COLORS = {
     "Init":  ("#f3f4f6", "#374151"),  # fond gris clair / texte gris fonce
@@ -110,7 +194,7 @@ class PartCard(QtWidgets.QFrame):
         self.thumb_label.setStyleSheet(
             "background: #f5f5f7; border-radius: 4px; color: #c7c7cc;"
         )
-        self.thumb_label.setText("(pas de vignette)")
+        self.thumb_label.setText(tr("(no thumbnail)"))
         layout.addWidget(self.thumb_label, alignment=QtCore.Qt.AlignCenter)
 
         # --- Nom de la piece ------------------------------------------
@@ -148,7 +232,7 @@ class PartCard(QtWidgets.QFrame):
 
         # --- Verrou (petite icone si verrouille) ----------------------
         if part.get("locked"):
-            lock_label = QtWidgets.QLabel("🔒 verrouillée")
+            lock_label = QtWidgets.QLabel(f"🔒 {tr('locked')}")
             lock_label.setStyleSheet(
                 "color: #b91c1c; font-size: 10px;")
             lock_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -160,10 +244,11 @@ class PartCard(QtWidgets.QFrame):
             self.setEnabled(False)
             self.setStyleSheet(self.styleSheet() +
                 "PartCard { background: #fafafa; }")
-            self.setToolTip("Aucun fichier FreeCAD associé à cette pièce.")
+            self.setToolTip(tr("No FreeCAD file associated to this part."))
         else:
             self.setCursor(QtCore.Qt.PointingHandCursor)
-            self.setToolTip(f"Cliquer pour ouvrir « {part['part_name']} »")
+            self.setToolTip(tr("Click to open «\u00a0{name}\u00a0»").format(
+                name=part['part_name']))
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton and self.part.get("cad_url"):
@@ -200,42 +285,59 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(16)
 
-        # Titre
-        title = QtWidgets.QLabel("📦 PiStock Explorer")
+        # --- Bandeau titre + sélecteur de langue à droite ----------
+        title_row = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel(f"📦 {tr('PiStock Explorer')}")
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        main_layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(QtWidgets.QLabel(tr("Language:")))
+        self.lang_combo = QtWidgets.QComboBox()
+        # Items : code interne en userData, label visible en text.
+        # On utilise les codes en majuscules comme label pour rester
+        # compact (EN / FR) — c'est la convention demandee.
+        self.lang_combo.addItem("EN", "en")
+        self.lang_combo.addItem("FR", "fr")
+        current = get_lang()
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == current:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_change)
+        title_row.addWidget(self.lang_combo)
+        main_layout.addLayout(title_row)
 
         # --- Section "Nouveau fichier" -------------------------------
-        new_file_group = QtWidgets.QGroupBox("Nouveau fichier")
+        new_file_group = QtWidgets.QGroupBox(tr("New file"))
         new_file_layout = QtWidgets.QHBoxLayout(new_file_group)
         new_file_layout.setSpacing(10)
 
         self._add_action_button(
-            new_file_layout, "Corps paramétrique",
-            "Créer un corps avec l'atelier PartDesign",
+            new_file_layout, tr("Parametric body"),
+            tr("Create a body with the PartDesign workbench"),
             self.action_new_partdesign)
         self._add_action_button(
-            new_file_layout, "Projet d'assemblage",
-            "Créer un projet d'assemblage",
+            new_file_layout, tr("Assembly project"),
+            tr("Create an assembly project"),
             self.action_new_assembly)
         self._add_action_button(
-            new_file_layout, "Fichier vide",
-            "Créer un nouveau fichier FreeCAD vide",
+            new_file_layout, tr("Empty file"),
+            tr("Create a new empty FreeCAD file"),
             self.action_new_empty)
         self._add_action_button(
-            new_file_layout, "Ouvrir un fichier",
-            "Ouvrir un fichier FreeCAD existant",
+            new_file_layout, tr("Open a file"),
+            tr("Open an existing FreeCAD file"),
             self.action_open_file)
         new_file_layout.addStretch()
         main_layout.addWidget(new_file_group)
 
         # --- Section PiStock -----------------------------------------
-        pistock_group = QtWidgets.QGroupBox("Pièces PiStock")
+        pistock_group = QtWidgets.QGroupBox(tr("PiStock parts"))
         pistock_layout = QtWidgets.QVBoxLayout(pistock_group)
 
         # Barre de filtre + actualiser
         filter_row = QtWidgets.QHBoxLayout()
-        filter_row.addWidget(QtWidgets.QLabel("Projet :"))
+        filter_row.addWidget(QtWidgets.QLabel(tr("Project:")))
         self.project_combo = QtWidgets.QComboBox()
         self.project_combo.setMinimumWidth(220)
         self.project_combo.currentIndexChanged.connect(self._refresh_grid)
@@ -244,7 +346,7 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         self.status_label = QtWidgets.QLabel("")
         self.status_label.setStyleSheet("color: #6b7280; font-size: 12px;")
         filter_row.addWidget(self.status_label)
-        refresh_btn = QtWidgets.QPushButton("🔄  Actualiser")
+        refresh_btn = QtWidgets.QPushButton(f"🔄  {tr('Refresh')}")
         refresh_btn.clicked.connect(self.refresh)
         filter_row.addWidget(refresh_btn)
         pistock_layout.addLayout(filter_row)
@@ -261,6 +363,37 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         pistock_layout.addWidget(self.scroll, 1)  # stretch=1
 
         main_layout.addWidget(pistock_group, 1)  # stretch=1
+
+    def _on_lang_change(self):
+        """Persiste la nouvelle langue.
+
+        IMPORTANT : on NE PEUT PAS reconstruire l'UI ici directement.
+        Ce handler est appele par Qt PENDANT la propagation du signal
+        currentIndexChanged du QComboBox. Si on detruit le layout (qui
+        contient le combobox) a ce moment-la, Qt continue ensuite a
+        utiliser le combobox detruit -> SEGFAULT.
+
+        Solution : QTimer.singleShot(0, ...) differe la reconstruction
+        a la prochaine iteration de l'event loop. Le signal a alors
+        fini d'etre traite et on peut tranquillement detruire les
+        widgets impliques."""
+        new_lang = self.lang_combo.currentData()
+        if not new_lang or new_lang == get_lang():
+            return  # rien a faire (chargement initial, ou meme langue)
+        set_lang(new_lang)
+        QtCore.QTimer.singleShot(0, self._rebuild_ui_after_lang_change)
+
+    def _rebuild_ui_after_lang_change(self):
+        """Reconstruit l'UI dans la nouvelle langue. Appele de facon
+        differee depuis _on_lang_change pour eviter le segfault Qt."""
+        # Detache l'ancien layout (et tous ses widgets enfants) en le
+        # transferant a un widget temporaire qui sera GC'd. Une fois
+        # qu'on est sorti du signal handler, c'est sans danger.
+        old_layout = self.layout()
+        if old_layout is not None:
+            QtWidgets.QWidget().setLayout(old_layout)
+        self._build_ui()
+        self.refresh()
 
     def _add_action_button(self, layout, title, subtitle, handler):
         """Bouton d'action FreeCAD style page d'accueil (titre + sous-titre)."""
@@ -318,7 +451,7 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
     # --- Rafraichissement complet (data + UI) -----------------------
     def refresh(self):
         """Recharge depuis l'API : projets + pieces, et reconstruit."""
-        self.status_label.setText("Chargement…")
+        self.status_label.setText(tr("Loading…"))
         QtWidgets.QApplication.processEvents()
 
         self.projects = fetch_json(API_PROJECTS) or []
@@ -330,8 +463,8 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         # refresh en boucle.
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
-        self.project_combo.addItem("Tous les projets", "")
-        self.project_combo.addItem("(Sans projet)", "__none__")
+        self.project_combo.addItem(tr("All projects"), "")
+        self.project_combo.addItem(tr("(No project)"), "__none__")
         for proj in self.projects:
             label = f"{proj['code']}"
             if proj.get("description"):
@@ -372,19 +505,18 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
 
         # 3. Mise a jour du compteur en barre
         if not filtered:
-            self.status_label.setText("Aucune pièce")
-            empty = QtWidgets.QLabel(
-                "Aucune pièce correspondant à ce filtre.\n"
-                "Utilisez la macro PiStock Exporter pour publier "
-                "depuis un document, ou créez une pièce manuellement "
-                "via l'interface web.")
+            self.status_label.setText(tr("No part"))
+            empty = QtWidgets.QLabel(tr(
+                "No part matching this filter.\n"
+                "Use the PiStock Exporter macro to publish from a "
+                "document, or create a part manually via the web interface."))
             empty.setAlignment(QtCore.Qt.AlignCenter)
             empty.setStyleSheet("color: #6b7280; padding: 40px;")
             self.grid_layout.addWidget(empty, 0, 0, 1, GRID_COLUMNS)
             return
         else:
             self.status_label.setText(
-                f"{len(filtered)} pièce(s)")
+                tr("{n} part(s)").format(n=len(filtered)))
 
         # 4. Place les cartes dans la grille
         cards = []
@@ -441,8 +573,9 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
             App.Console.PrintError(
                 f"❌ Échec téléchargement '{part_name}' : {e}\n")
             QtWidgets.QMessageBox.warning(
-                self, "PiStock — Erreur",
-                f"Impossible de télécharger « {part_name} » :\n{e}")
+                self, tr("PiStock — Error"),
+                tr("Cannot download «\u00a0{name}\u00a0» :\n{err}").format(
+                    name=part_name, err=str(e)))
             return
 
         App.Console.PrintMessage(
