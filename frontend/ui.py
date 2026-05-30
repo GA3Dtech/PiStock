@@ -919,12 +919,12 @@ def part_page(part_id: int):
         # qu'il ne connait pas — du coup <model-viewer> dans un
         # ui.html() etait silencieusement supprime. Avec ui.element,
         # NiceGUI sait qu'on veut un noeud brut avec ce nom de tag.
+        # On lui attribue un id DOM stable pour pouvoir le cibler en
+        # JavaScript lors d'un changement de revision.
         with ui.card().classes("w-full p-0 overflow-hidden"):
-            # Construction des attributs. Les attributs booleens
-            # (camera-controls, auto-rotate) sont passes sans valeur,
-            # les attributs avec valeur sont en src="...".
             viewer = ui.element("model-viewer")
             viewer.props(
+                f'id="pistock-viewer" '
                 f'src="{part["glb_url"]}" '
                 f'alt="Modèle 3D de {part["part_name"]}" '
                 f'camera-controls '
@@ -934,7 +934,6 @@ def part_page(part_id: int):
                 f'auto-rotate '
                 f'auto-rotate-delay="3000"'
             )
-            # Dimensionnement direct (le CSS global a aussi un fallback)
             viewer.style("width: 100%; height: 600px; display: block; "
                          "background: linear-gradient(135deg, "
                          "#f5f5f7 0%, #e8e8eb 100%);")
@@ -956,21 +955,16 @@ def part_page(part_id: int):
         def change_displayed_revision(glb_url: str, author: str, ts: str,
                                        version: str):
             """Change le modele affiche dans le viewer + met a jour
-            l'info en dessous. On utilise viewer.props() qui synchronise
-            l'attribut côté client via NiceGUI, plus propre qu'un
-            ui.run_javascript() direct."""
-            # On reapplique tous les attributs avec le nouveau src.
-            # Note : NiceGUI replace les props existantes a chaque appel.
-            viewer.props(
-                f'src="{glb_url}" '
-                f'alt="Modèle 3D de {part["part_name"]} (rev {version})" '
-                f'camera-controls '
-                f'touch-action="pan-y" '
-                f'shadow-intensity="1" '
-                f'exposure="1" '
-                f'auto-rotate '
-                f'auto-rotate-delay="3000"'
-            )
+            l'info en dessous.
+
+            On utilise document.getElementById + .src direct plutot que
+            viewer.props() : Vue.js ne synchronise pas correctement les
+            attributs d'un custom element inconnu, donc .props() ne se
+            propageait pas jusqu'au DOM dans certains cas. La voie
+            directe via JavaScript est garantie de marcher."""
+            js = (f'const v = document.getElementById("pistock-viewer"); '
+                  f'if (v) {{ v.setAttribute("src", {json.dumps(glb_url)}); }}')
+            ui.run_javascript(js)
             info_label.text = (f"Révision {version} — par {author} le {ts}")
 
         def refresh_revisions():

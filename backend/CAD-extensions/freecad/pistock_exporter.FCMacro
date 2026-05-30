@@ -339,13 +339,56 @@ def export_and_send_to_pistock():
         else:
             raise Exception("Impossible d'accéder à la vue 3D active.")
 
-        # C. Export 3D .glb (glTF binaire)
+        # C. Export 3D .glb (glTF binaire) avec tessellation fine
+        #
+        # ImportGui.export() utilise la tessellation par DEFAUT de
+        # chaque objet (ViewObject.Deviation, ~0.5% de la bbox), ce
+        # qui efface les chanfreins millimetriques. On contourne ca
+        # en modifiant TEMPORAIREMENT la deviation de chaque objet
+        # juste pour l'export, puis on restaure les valeurs originales
+        # (try/finally garantit la restauration meme en cas d'erreur).
+        #
+        # On reste sur les Part::Feature originaux (qui ont une Shape),
+        # contrairement a une tentative precedente avec MeshPart qui
+        # creait des Mesh::Feature -> tous rejetes par ImportGui en
+        # "null shape" car ce dernier veut des Shapes.
         all_objects = [o for o in doc.Objects if hasattr(o, "Shape")]
         if not all_objects:
             raise Exception("Le document ne contient aucun objet exportable.")
 
+        # Backup et modification per-object des params de tessellation
+        # Deviation = pourcentage de la diagonale bbox (default ~0.5)
+        # AngularDeflection = en degres (default ~28.5)
+        tess_backups = []
+        for obj in all_objects:
+            vo = getattr(obj, "ViewObject", None)
+            if vo is None:
+                continue
+            try:
+                old_dev = vo.Deviation
+                old_ang = vo.AngularDeflection
+                tess_backups.append((vo, old_dev, old_ang))
+                # 0.01% = chanfreins millimetriques bien visibles
+                vo.Deviation = 0.01
+                vo.AngularDeflection = 5.0
+            except (AttributeError, Exception):
+                # Certains ViewObject n'ont pas ces proprietes
+                # (datums, plans...). On les saute silencieusement.
+                pass
+
         import ImportGui
-        ImportGui.export(all_objects, glb_temp)
+        try:
+            ImportGui.export(all_objects, glb_temp)
+        finally:
+            # Restauration des valeurs originales, meme si l'export
+            # a plante. Indispensable pour ne pas laisser le document
+            # dans un etat modifie pour l'utilisateur.
+            for vo, dev, ang in tess_backups:
+                try:
+                    vo.Deviation = dev
+                    vo.AngularDeflection = ang
+                except Exception:
+                    pass
 
         if os.path.exists(glb_temp):
             App.Console.PrintMessage("✔️  Fichier 3D .glb généré et prêt.\n")
