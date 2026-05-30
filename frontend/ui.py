@@ -86,8 +86,8 @@ def _register_pwa():
     ui.add_head_html('''
         <link rel="manifest" href="/static/manifest.json">
         <meta name="theme-color" content="#292524">
-        <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-        <link rel="apple-touch-icon" href="/static/icon.svg">
+        <link rel="icon" href="/static/icon-192.png" type="image/png">
+        <link rel="apple-touch-icon" href="/static/icon-192.png">
         <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
