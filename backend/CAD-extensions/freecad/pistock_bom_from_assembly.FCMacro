@@ -1,0 +1,436 @@
+# PiStock — PLM/inventory tool for FreeCAD-based workshops
+# Copyright (C) 2026 GA3Dtech
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# (...) See https://www.gnu.org/licenses/agpl-3.0.html
+
+"""
+PiStock — Génération automatique d'une BOM depuis l'assemblage actif.
+
+Scanne le document FreeCAD actuel à la recherche d'App::Link (les
+composants d'un assemblage natif), compte les occurrences (en tenant
+compte des LinkArray via ElementCount), et propose à l'utilisateur de
+créer une BOM PiStock avec ces éléments.
+
+L'utilisateur peut, pour chaque ligne détectée :
+  - Laisser créer une nouvelle pièce dans PiStock (par défaut si le
+    nom n'existe pas déjà côté serveur)
+  - Mapper explicitement à une pièce existante (re-routage)
+  - Exclure la ligne (cas typique : visserie standard qu'on ne veut
+    pas tracer individuellement)
+
+L'envoi au serveur passe par l'endpoint atomique
+POST /api/v1/boms/from-assembly : si quoi que ce soit échoue, rien
+n'est créé.
+
+Compatible avec l'atelier Assembly natif FreeCAD 1.x. Pour A2plus
+ou Assembly4, adapter la fonction scan_active_document().
+"""
+
+import json
+import urllib.request
+import urllib.error
+import FreeCAD as App
+from PySide6 import QtWidgets, QtCore
+
+# Configuration : adresse du serveur PiStock
+API_HOST = "http://127.0.0.1:8000"
+API_PARTS = f"{API_HOST}/api/v1/parts"
+API_PROJECTS = f"{API_HOST}/api/v1/projects"
+API_BOM_FROM_ASSEMBLY = f"{API_HOST}/api/v1/boms/from-assembly"
+
+# Préférence FreeCAD : utilisée pour la langue (partagée avec les
+# autres macros PiStock).
+PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/PiStock"
+
+
+# ======================================================================
+#  I18N — squelette minimal de traduction
+# ======================================================================
+TRANSLATIONS = {
+    "en": {},
+    "fr": {
+        "PiStock — BOM from assembly": "PiStock — BOM depuis l'assemblage",
+        "Language:": "Langue :",
+        "No active document.": "Aucun document actif.",
+        "No assembly component (App::Link) found in this document.":
+            "Aucun composant d'assemblage (App::Link) trouvé dans ce document.",
+        "Detected parts": "Pièces détectées",
+        "Name": "Nom",
+        "Qty": "Qté",
+        "Action": "Action",
+        "Create new": "Créer nouvelle",
+        "Map to:": "Mapper à :",
+        "Exclude": "Exclure",
+        "Description:": "Description :",
+        "Project:": "Projet :",
+        "(No project)": "(Sans projet)",
+        "Create BOM": "Créer la BOM",
+        "Cancel": "Annuler",
+        "PiStock — Error": "PiStock — Erreur",
+        "Cannot reach PiStock server.\n{err}":
+            "Impossible de joindre le serveur PiStock.\n{err}",
+        "BOM {code} created ({n} lines, {created} new parts).":
+            "BOM {code} créée ({n} lignes, {created} pièces créées).",
+        "PiStock — Success": "PiStock — Succès",
+    },
+}
+
+
+def get_lang():
+    try:
+        return App.ParamGet(PARAM_PATH).GetString("Language", "en") or "en"
+    except Exception:
+        return "en"
+
+
+def set_lang(lang):
+    if lang not in TRANSLATIONS:
+        return
+    try:
+        App.ParamGet(PARAM_PATH).SetString("Language", lang)
+    except Exception:
+        pass
+
+
+def tr(text):
+    return TRANSLATIONS.get(get_lang(), {}).get(text, text)
+
+
+# ======================================================================
+#  SCAN DE L'ASSEMBLAGE
+# ======================================================================
+def scan_active_document():
+    """Parcourt l'Active Document et compte les composants d'assemblage.
+
+    Retourne un dict {part_name: count}. La detection cible les
+    App::Link qui sont les composants standard d'un assemblage natif
+    FreeCAD 1.x. Pour chaque Link :
+      - Le 'LinkedObject' donne la cible (le Body / la Part liée)
+      - Le 'Label' de la cible est utilisé comme nom de la pièce
+      - 'ElementCount' (pour les LinkArray) multiplie la quantité
+
+    Si l'utilisateur n'a pas d'assemblage, retourne {}.
+    """
+    doc = App.ActiveDocument
+    if doc is None:
+        return None  # signale 'pas de doc' (vs {} = doc mais vide)
+
+    counts = {}
+    for obj in doc.Objects:
+        # On cible les App::Link et leurs variantes (App::LinkPython).
+        # NB : App::LinkElement = element interne d'un LinkArray, on
+        # ne le compte PAS car deja represente par son parent.
+        if not obj.TypeId.startswith("App::Link"):
+            continue
+        if obj.TypeId == "App::LinkElement":
+            continue
+        target = getattr(obj, "LinkedObject", None)
+        if target is None:
+            continue
+        # Nom = Label de la cible. Si Link externe, target est dans
+        # un autre Document mais .Label fonctionne pareil.
+        name = target.Label
+        # LinkArray : si ElementCount > 0, c'est une replication.
+        # Sinon, c'est un Link simple (compte pour 1).
+        n = getattr(obj, "ElementCount", 0) or 1
+        counts[name] = counts.get(name, 0) + n
+    return counts
+
+
+# ======================================================================
+#  COMMUNICATION SERVEUR
+# ======================================================================
+def fetch_json(url, timeout=5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        App.Console.PrintWarning(f"⚠️  PiStock API ({url}) : {e}\n")
+        return None
+
+
+def post_json(url, payload, timeout=15):
+    """POST en JSON. Retourne (status_code, parsed_body | error_detail)."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return (resp.status, json.loads(resp.read().decode("utf-8")))
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            body = {"detail": str(e)}
+        return (e.code, body)
+    except Exception as e:
+        return (0, {"detail": str(e)})
+
+
+# ======================================================================
+#  DIALOGUE PRINCIPAL
+# ======================================================================
+class BomFromAssemblyDialog(QtWidgets.QDialog):
+    """Dialogue qui presente les pieces detectees et permet de les
+    valider/mapper avant envoi au serveur."""
+
+    # Codes pour la combobox d'action (userData)
+    ACTION_CREATE_NEW = "__create__"
+    ACTION_EXCLUDE = "__exclude__"
+
+    def __init__(self, scanned_counts, existing_parts, existing_projects,
+                  default_description, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("PiStock — BOM from assembly"))
+        self.setMinimumWidth(720)
+        self.setMinimumHeight(480)
+
+        self.scanned_counts = scanned_counts        # {name: count}
+        self.existing_parts = existing_parts        # [{id, part_name, ...}]
+        self.existing_projects = existing_projects  # [{id, code, description}]
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # --- Bandeau du haut : titre + langue ------------------------
+        top_row = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel(f"📦 {tr('PiStock — BOM from assembly')}")
+        title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        top_row.addWidget(title)
+        top_row.addStretch()
+        top_row.addWidget(QtWidgets.QLabel(tr("Language:")))
+        self.lang_combo = QtWidgets.QComboBox()
+        self.lang_combo.addItem("EN", "en")
+        self.lang_combo.addItem("FR", "fr")
+        current = get_lang()
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == current:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_change)
+        top_row.addWidget(self.lang_combo)
+        layout.addLayout(top_row)
+
+        # --- Description + Projet ------------------------------------
+        form = QtWidgets.QFormLayout()
+        self.desc_edit = QtWidgets.QLineEdit(default_description)
+        form.addRow(tr("Description:"), self.desc_edit)
+        self.project_combo = QtWidgets.QComboBox()
+        self.project_combo.addItem(tr("(No project)"), None)
+        for proj in existing_projects:
+            label = f"{proj['code']}"
+            if proj.get("description"):
+                short = proj["description"][:40]
+                if len(proj["description"]) > 40:
+                    short += "…"
+                label += f" — {short}"
+            self.project_combo.addItem(label, proj["id"])
+        form.addRow(tr("Project:"), self.project_combo)
+        layout.addLayout(form)
+
+        # --- Table des pièces détectées ------------------------------
+        layout.addWidget(QtWidgets.QLabel(
+            f"{tr('Detected parts')} ({len(scanned_counts)}) :"))
+        self.table = QtWidgets.QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(
+            [tr("Name"), tr("Qty"), tr("Action")])
+        # Colonne nom en mode stretch ; les autres ajustables.
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+
+        self._populate_table()
+
+        # --- Boutons OK / Annuler ------------------------------------
+        buttons = QtWidgets.QDialogButtonBox()
+        self.ok_btn = buttons.addButton(
+            tr("Create BOM"),
+            QtWidgets.QDialogButtonBox.AcceptRole)
+        cancel_btn = buttons.addButton(
+            tr("Cancel"),
+            QtWidgets.QDialogButtonBox.RejectRole)
+        self.ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _populate_table(self):
+        """Remplit la table avec les pieces detectees. Pour chaque
+        ligne : nom (lecture seule), qty (SpinBox), action (ComboBox)."""
+        names = sorted(self.scanned_counts.keys())
+        self.table.setRowCount(len(names))
+        # Index pour matching automatique : nom -> piece existante
+        existing_by_name = {p["part_name"]: p
+                             for p in self.existing_parts}
+
+        for row, name in enumerate(names):
+            qty = self.scanned_counts[name]
+
+            # Col 0 : nom détecté
+            name_item = QtWidgets.QTableWidgetItem(name)
+            name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            self.table.setItem(row, 0, name_item)
+
+            # Col 1 : quantité (SpinBox)
+            qty_spin = QtWidgets.QSpinBox()
+            qty_spin.setMinimum(1)
+            qty_spin.setMaximum(99999)
+            qty_spin.setValue(qty)
+            self.table.setCellWidget(row, 1, qty_spin)
+
+            # Col 2 : action (ComboBox)
+            action = QtWidgets.QComboBox()
+            # Option 1 : créer nouvelle pièce
+            action.addItem(tr("Create new"), self.ACTION_CREATE_NEW)
+            # Options 2..N : mapper à existante
+            for p in self.existing_parts:
+                label = f"{tr('Map to:')} {p['part_name']}"
+                if p.get("locked"):
+                    label += " 🔒"
+                action.addItem(label, p["id"])
+            # Option dernière : exclure
+            action.addItem(tr("Exclude"), self.ACTION_EXCLUDE)
+
+            # Si le nom détecté matche exactement une pièce existante,
+            # on sélectionne automatiquement "Map to: <nom>".
+            if name in existing_by_name:
+                target_id = existing_by_name[name]["id"]
+                for i in range(action.count()):
+                    if action.itemData(i) == target_id:
+                        action.setCurrentIndex(i)
+                        break
+            self.table.setCellWidget(row, 2, action)
+
+    def _on_lang_change(self):
+        """Persiste la langue. Le rebuild a chaud d'un dialog modal
+        avec une QTableWidget complexe est risque -> on previent
+        l'utilisateur que la nouvelle langue sera active au prochain
+        lancement."""
+        new = self.lang_combo.currentData()
+        if not new or new == get_lang():
+            return
+        set_lang(new)
+        QtWidgets.QMessageBox.information(
+            self, tr("Language:"),
+            "Effective at next macro launch."
+            if new == "en"
+            else "Effectif au prochain lancement de la macro."
+        )
+
+    def build_payload(self):
+        """Construit le payload JSON a envoyer au serveur.
+        Retourne None si aucune ligne n'est validee."""
+        lines = []
+        for row in range(self.table.rowCount()):
+            name = self.table.item(row, 0).text()
+            qty = self.table.cellWidget(row, 1).value()
+            action_combo = self.table.cellWidget(row, 2)
+            action = action_combo.currentData()
+            if action == self.ACTION_EXCLUDE:
+                continue
+            entry = {"name": name, "quantity": qty}
+            if action != self.ACTION_CREATE_NEW:
+                # mapping explicite à une pièce existante (id)
+                entry["use_existing_id"] = int(action)
+            lines.append(entry)
+        if not lines:
+            return None
+        proj_id = self.project_combo.currentData()
+        return {
+            "description": self.desc_edit.text().strip(),
+            "id_project": proj_id,
+            "lines": lines,
+        }
+
+
+# ======================================================================
+#  POINT D'ENTREE
+# ======================================================================
+def run():
+    # 1. Scan du document actif
+    counts = scan_active_document()
+    if counts is None:
+        QtWidgets.QMessageBox.warning(
+            None, tr("PiStock — Error"), tr("No active document."))
+        return
+    if not counts:
+        QtWidgets.QMessageBox.warning(
+            None, tr("PiStock — Error"),
+            tr("No assembly component (App::Link) found in this document."))
+        return
+
+    App.Console.PrintMessage(
+        f"🔍 Scan : {len(counts)} pièce(s) distincte(s) détectée(s)\n")
+    for name, n in sorted(counts.items()):
+        App.Console.PrintMessage(f"   • {name} × {n}\n")
+
+    # 2. Récupération de la liste serveur
+    existing_parts = fetch_json(API_PARTS) or []
+    existing_projects = fetch_json(API_PROJECTS) or []
+
+    # 3. Description par défaut : nom du document
+    doc = App.ActiveDocument
+    default_desc = (f"BOM extraite de {doc.Label}.FCStd"
+                     if doc and doc.Label else "BOM extraite d'assemblage")
+
+    # 4. Dialogue
+    import FreeCADGui as Gui
+    dialog = BomFromAssemblyDialog(
+        counts, existing_parts, existing_projects,
+        default_desc, parent=Gui.getMainWindow())
+    if dialog.exec() != QtWidgets.QDialog.Accepted:
+        App.Console.PrintMessage("Annulé.\n")
+        return
+
+    # 5. Construction du payload et envoi
+    payload = dialog.build_payload()
+    if payload is None:
+        QtWidgets.QMessageBox.warning(
+            None, tr("PiStock — Error"),
+            "Aucune ligne à envoyer (toutes exclues).")
+        return
+
+    App.Console.PrintMessage(
+        f"📡 Envoi de la BOM ({len(payload['lines'])} lignes)…\n")
+    status, body = post_json(API_BOM_FROM_ASSEMBLY, payload)
+
+    if status == 200 and body.get("status") == "success":
+        code = body.get("code", "?")
+        n_lines = body.get("lines_created", 0)
+        created = len(body.get("parts_created", []))
+        msg = tr("BOM {code} created ({n} lines, "
+                  "{created} new parts).").format(
+            code=code, n=n_lines, created=created)
+        App.Console.PrintMessage(f"✔️  {msg}\n")
+        if created > 0:
+            App.Console.PrintMessage("   Pièces nouvellement créées :\n")
+            for p in body["parts_created"]:
+                App.Console.PrintMessage(f"     - {p['part_name']}\n")
+        QtWidgets.QMessageBox.information(
+            None, tr("PiStock — Success"), msg)
+    else:
+        err = body.get("detail", "Unknown error")
+        if isinstance(err, dict):
+            err = err.get("message", str(err))
+        App.Console.PrintError(f"❌ HTTP {status} : {err}\n")
+        QtWidgets.QMessageBox.warning(
+            None, tr("PiStock — Error"),
+            tr("Cannot reach PiStock server.\n{err}").format(
+                err=f"HTTP {status} : {err}"))
+
+
+# Lancement
+run()

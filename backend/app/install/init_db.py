@@ -103,6 +103,27 @@ def setup_pistock_environment():
         # Description libre, multi-lignes. Optionnelle.
         description: str | None = Field(default=None)
 
+    class Bom(SQLModel, table=True):
+        __tablename__ = "bom"
+        id: int | None = Field(default=None, primary_key=True)
+        # Code BOM : B + 4 chiffres zero-padded (B0001, B0002, ...).
+        # Incremental, unique, lisible.
+        code: str = Field(index=True, unique=True, max_length=5)
+        # Description libre.
+        description: str | None = Field(default=None)
+        # Lien optionnel vers un projet : une BOM peut etre rattachee
+        # a un projet (la BOM d'un produit) ou exister independamment.
+        id_project: int | None = Field(default=None,
+                                        foreign_key="project.id")
+
+    class BomLine(SQLModel, table=True):
+        __tablename__ = "bom_line"
+        id: int | None = Field(default=None, primary_key=True)
+        id_bom: int = Field(foreign_key="bom.id", nullable=False)
+        id_parts: int = Field(foreign_key="parts.id", nullable=False)
+        # Quantite necessaire de cette piece pour assembler une BOM.
+        quantity: int = Field(default=1)
+
     # 4. Initialize SQLite Database Engine
     db_path = os.path.join(data_dir, "pistockdatabase.sqlite3")
 

@@ -463,6 +463,234 @@ def create_project_in_db(description: str):
         return (True, f"Projet '{code}' créé.", code)
 
 
+# ----------------------------------------------------------------------
+#  HELPERS DB : BOM (nomenclatures)
+# ----------------------------------------------------------------------
+# Pattern identique aux autres entites : on accede directement a la
+# session SQLModel (pas via HTTP). main.Bom / main.BomLine sont
+# importes a la demande pour eviter l'import circulaire.
+
+def fetch_boms(project_code: str | None = None):
+    """Liste les BOMs avec compteur de lignes."""
+    import main
+    engine = main.engine
+    with Session(engine) as session:
+        query = select(main.Bom).order_by(main.Bom.code)
+        if project_code:
+            project = session.exec(
+                select(main.Project)
+                .where(main.Project.code == project_code)
+            ).first()
+            if project is None:
+                return []
+            query = query.where(main.Bom.id_project == project.id)
+        boms = session.exec(query).all()
+        projects_by_id = {
+            p.id: p.code
+            for p in session.exec(select(main.Project)).all()
+        }
+        result = []
+        for b in boms:
+            lines = session.exec(
+                select(main.BomLine).where(main.BomLine.id_bom == b.id)
+            ).all()
+            result.append({
+                "id": b.id,
+                "code": b.code,
+                "description": b.description,
+                "id_project": b.id_project,
+                "project_code": projects_by_id.get(b.id_project),
+                "line_count": len(lines),
+            })
+        return result
+
+
+def fetch_bom_detail(bom_id: int):
+    """Detail d'une BOM + ses lignes avec noms de pieces."""
+    import main
+    with Session(main.engine) as session:
+        bom = session.get(main.Bom, bom_id)
+        if bom is None:
+            return None
+        lines_rows = session.exec(
+            select(main.BomLine)
+            .where(main.BomLine.id_bom == bom_id)
+            .order_by(main.BomLine.id)
+        ).all()
+        # Pre-charge les parts
+        part_ids = {l.id_parts for l in lines_rows}
+        parts_by_id = {
+            p.id: p for p in session.exec(
+                select(main.Parts).where(main.Parts.id.in_(part_ids))
+            ).all()
+        } if part_ids else {}
+        project_code = None
+        if bom.id_project is not None:
+            proj = session.get(main.Project, bom.id_project)
+            project_code = proj.code if proj else None
+        return {
+            "id": bom.id,
+            "code": bom.code,
+            "description": bom.description,
+            "id_project": bom.id_project,
+            "project_code": project_code,
+            "lines": [
+                {
+                    "id": l.id,
+                    "id_parts": l.id_parts,
+                    "part_name": (parts_by_id[l.id_parts].part_name
+                                   if l.id_parts in parts_by_id else "?"),
+                    "quantity": l.quantity,
+                }
+                for l in lines_rows
+            ],
+        }
+
+
+def create_bom_db(description: str, id_project: int | None):
+    """Cree une BOM. Retourne (ok, msg, code)."""
+    import main
+    description = (description or "").strip() or None
+    with Session(main.engine) as session:
+        if id_project is not None:
+            if session.get(main.Project, id_project) is None:
+                return (False, "Projet introuvable.", None)
+        try:
+            code = main._next_bom_code(session)
+        except Exception as e:
+            return (False, str(e), None)
+        bom = main.Bom(code=code, description=description,
+                        id_project=id_project)
+        session.add(bom)
+        session.commit()
+        session.refresh(bom)
+        return (True, f"BOM '{code}' créée.", code)
+
+
+def delete_bom_db(bom_id: int):
+    """Supprime une BOM et ses lignes (cascade manuelle)."""
+    import main
+    with Session(main.engine) as session:
+        bom = session.get(main.Bom, bom_id)
+        if bom is None:
+            return (False, "BOM introuvable.")
+        lines = session.exec(
+            select(main.BomLine).where(main.BomLine.id_bom == bom_id)
+        ).all()
+        for line in lines:
+            session.delete(line)
+        session.delete(bom)
+        session.commit()
+        return (True, f"BOM '{bom.code}' supprimée.")
+
+
+def add_bom_line_db(bom_id: int, part_id: int, quantity: int):
+    """Ajoute une ligne. Si la part est deja presente, cumule la
+    quantite. Retourne (ok, msg)."""
+    if quantity is None or quantity <= 0:
+        return (False, "La quantité doit être > 0.")
+    import main
+    with Session(main.engine) as session:
+        if session.get(main.Bom, bom_id) is None:
+            return (False, "BOM introuvable.")
+        if session.get(main.Parts, part_id) is None:
+            return (False, "Pièce introuvable.")
+        existing = session.exec(
+            select(main.BomLine)
+            .where(main.BomLine.id_bom == bom_id)
+            .where(main.BomLine.id_parts == part_id)
+        ).first()
+        if existing:
+            existing.quantity += int(quantity)
+            session.add(existing)
+            session.commit()
+            return (True, f"Quantité cumulée à {existing.quantity}.")
+        session.add(main.BomLine(id_bom=bom_id, id_parts=part_id,
+                                  quantity=int(quantity)))
+        session.commit()
+        return (True, "Ligne ajoutée.")
+
+
+def update_bom_line_db(line_id: int, quantity: int):
+    """Met a jour la quantite. Retourne (ok, msg)."""
+    if quantity is None or quantity <= 0:
+        return (False, "La quantité doit être > 0.")
+    import main
+    with Session(main.engine) as session:
+        line = session.get(main.BomLine, line_id)
+        if line is None:
+            return (False, "Ligne introuvable.")
+        line.quantity = int(quantity)
+        session.add(line)
+        session.commit()
+        return (True, "Quantité mise à jour.")
+
+
+def delete_bom_line_db(line_id: int):
+    """Supprime une ligne. Retourne (ok, msg)."""
+    import main
+    with Session(main.engine) as session:
+        line = session.get(main.BomLine, line_id)
+        if line is None:
+            return (False, "Ligne introuvable.")
+        session.delete(line)
+        session.commit()
+        return (True, "Ligne supprimée.")
+
+
+def bom_stock_apply(bom_id: int, factor: int, direction: str):
+    """Applique 'factor' fois la BOM sur le stock.
+    direction='add' : incremente. direction='sub' : decremente, refus
+    atomique si stock insuffisant.
+    Retourne (ok, msg, shortages_list)."""
+    if factor is None or factor <= 0:
+        return (False, "Le facteur doit être > 0.", None)
+    import main
+    with Session(main.engine) as session:
+        bom = session.get(main.Bom, bom_id)
+        if bom is None:
+            return (False, "BOM introuvable.", None)
+        lines = session.exec(
+            select(main.BomLine).where(main.BomLine.id_bom == bom_id)
+        ).all()
+        if not lines:
+            return (False, "La BOM est vide.", None)
+
+        if direction == "sub":
+            # Verification atomique : on calcule TOUS les manques avant
+            # de modifier quoi que ce soit.
+            shortages = []
+            for line in lines:
+                stock = session.exec(
+                    select(main.Stock)
+                    .where(main.Stock.id_parts == line.id_parts)
+                ).first()
+                current = stock.quantity if stock else 0
+                needed = line.quantity * factor
+                if current < needed:
+                    part = session.get(main.Parts, line.id_parts)
+                    shortages.append({
+                        "part_name": part.part_name if part else "?",
+                        "needed": needed,
+                        "available": current,
+                        "missing": needed - current,
+                    })
+            if shortages:
+                return (False, "Stock insuffisant.", shortages)
+
+        # Application des changements
+        for line in lines:
+            stock = main._get_or_create_stock(session, line.id_parts)
+            delta = line.quantity * factor
+            if direction == "sub":
+                delta = -delta
+            stock.quantity += delta
+            session.add(stock)
+        session.commit()
+        verb = "ajoutée" if direction == "add" else "retirée"
+        return (True, f"BOM {verb} ×{factor}.", None)
+
+
 # Note : la sauvegarde des photos de stock se fait via l'endpoint REST
 # POST /api/v1/parts/{id}/stock-photo dans main.py, appele directement
 # par le JS du navigateur (fetch). On n'a pas besoin d'une version
@@ -572,6 +800,8 @@ def dashboard_page():
             ui.element("div").classes("flex-grow")
 
             ui.button(_("Project"), on_click=lambda: open_projects_dialog()) \
+                .props("color=primary outline").classes("text-base")
+            ui.button("BOMs", on_click=lambda: open_boms_dialog()) \
                 .props("color=primary outline").classes("text-base")
             ui.button(_("+ New part"), on_click=lambda: open_new_part_dialog()) \
                 .props("color=primary").classes("text-base")
@@ -1417,6 +1647,330 @@ def open_stock_dialog(part: dict, on_change):
             else:
                 ui.notify(msg, type="negative")
 
+        dialog.open()
+
+
+# ======================================================================
+#  DIALOGUE : LISTE DES BOMs (+ création + actions stock)
+# ======================================================================
+def open_boms_dialog():
+    """Dialogue principal des BOMs : liste, création, et actions de
+    stock (ajouter/retirer N fois). Cliquer sur une ligne ouvre le
+    sous-dialogue d'édition des lignes de la BOM."""
+
+    with ui.dialog() as dialog, ui.card().classes("min-w-[760px] max-w-[900px]"):
+        ui.label("BOMs (nomenclatures)").classes("text-lg font-medium")
+
+        list_container = ui.column() \
+            .classes("w-full gap-2 max-h-[420px] overflow-y-auto")
+
+        # --- Formulaire de création (masqué par défaut) ---------------
+        with ui.column().classes("w-full gap-2 mt-2") as creation_form:
+            ui.label("Nouvelle BOM").classes("text-sm font-medium")
+            desc_input = ui.textarea(
+                placeholder="Description (optionnelle)") \
+                .classes("w-full").props("autogrow rows=2")
+            # Sélecteur projet (optionnel) : permet de rattacher la
+            # BOM à un projet existant directement à la création.
+            project_select = ui.select(
+                options={0: "(Sans projet)"},  # peuplé dans render()
+                value=0, label="Projet (optionnel)"
+            ).classes("w-full")
+            err_label = ui.label("") \
+                .classes("text-red-600 text-sm min-h-[1.2em]")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button(_("Cancel"),
+                          on_click=lambda: hide_creation()) \
+                    .props("flat")
+                ui.button(_("Create"),
+                          on_click=lambda: confirm_create()) \
+                    .props("color=primary")
+        creation_form.set_visibility(False)
+
+        # --- Pied : "+ Nouvelle BOM" et "Fermer" ---------------------
+        with ui.row().classes("w-full justify-between gap-2 mt-2"):
+            add_btn = ui.button("+ Nouvelle BOM",
+                                 on_click=lambda: show_creation()) \
+                .props("color=primary outline")
+            ui.button(_("Close"), on_click=dialog.close).props("flat")
+
+        def show_creation():
+            desc_input.value = ""
+            project_select.value = 0
+            err_label.text = ""
+            # Recharge la liste des projets dans le selecteur
+            options = {0: "(Sans projet)"}
+            for proj in fetch_projects():
+                options[proj["id"]] = f"{proj['code']} — {(proj['description'] or '')[:30]}"
+            project_select.options = options
+            project_select.update()
+            creation_form.set_visibility(True)
+            add_btn.set_visibility(False)
+
+        def hide_creation():
+            creation_form.set_visibility(False)
+            add_btn.set_visibility(True)
+
+        def confirm_create():
+            id_proj = project_select.value or None
+            if id_proj == 0:
+                id_proj = None
+            ok, msg, code = create_bom_db(desc_input.value or "", id_proj)
+            if not ok:
+                err_label.text = msg
+                return
+            ui.notify(msg, type="positive")
+            hide_creation()
+            render_boms_list()
+
+        def render_boms_list():
+            list_container.clear()
+            boms = fetch_boms()
+            if not boms:
+                with list_container:
+                    ui.label("Aucune BOM. Cliquez sur « + Nouvelle BOM »"
+                             " pour en créer une.") \
+                        .classes("text-gray-500 text-sm text-center p-4")
+                return
+            for bom in boms:
+                with list_container:
+                    render_bom_row(bom)
+
+        def render_bom_row(bom):
+            with ui.card().classes("w-full p-3"):
+                with ui.row().classes("items-center gap-3 w-full no-wrap"):
+                    # Code
+                    ui.label(bom["code"]) \
+                        .classes("text-sm font-mono font-bold "
+                                  "text-blue-700 bg-blue-50 "
+                                  "px-2 py-1 rounded flex-shrink-0")
+                    # Description + projet
+                    with ui.column().classes("gap-0 flex-grow"):
+                        desc = bom["description"] or "(sans description)"
+                        ui.label(desc).classes("text-sm font-medium")
+                        meta = f"{bom['line_count']} ligne(s)"
+                        if bom["project_code"]:
+                            meta += f" • projet {bom['project_code']}"
+                        ui.label(meta).classes("text-xs text-gray-500")
+
+                    # Bouton "Éditer"
+                    def make_edit(bid=bom["id"]):
+                        def handler():
+                            dialog.close()
+                            open_bom_edit_dialog(bid)
+                        return handler
+                    ui.button(icon="edit", on_click=make_edit()) \
+                        .props("flat round dense color=primary") \
+                        .tooltip("Éditer les lignes")
+
+                    # Stock +/- (avec mini-prompt pour le facteur)
+                    def make_stock_apply(bid=bom["id"],
+                                          direction="add"):
+                        def handler():
+                            open_bom_stock_dialog(bid, direction,
+                                                   on_done=render_boms_list)
+                        return handler
+                    ui.button(icon="add", on_click=make_stock_apply(
+                                bid=bom["id"], direction="add")) \
+                        .props("flat round dense color=positive") \
+                        .tooltip("Ajouter au stock")
+                    ui.button(icon="remove", on_click=make_stock_apply(
+                                bid=bom["id"], direction="sub")) \
+                        .props("flat round dense color=warning") \
+                        .tooltip("Retirer du stock")
+
+                    # Suppression (avec confirmation)
+                    def make_delete(bid=bom["id"], code=bom["code"]):
+                        def handler():
+                            confirm_delete_bom(bid, code,
+                                                on_done=render_boms_list)
+                        return handler
+                    ui.button(icon="delete", on_click=make_delete()) \
+                        .props("flat round dense color=negative") \
+                        .tooltip("Supprimer cette BOM")
+
+        render_boms_list()
+        dialog.open()
+
+
+def confirm_delete_bom(bom_id: int, code: str, on_done):
+    """Dialogue de confirmation pour la suppression d'une BOM."""
+    with ui.dialog() as d, ui.card():
+        ui.label(f"Supprimer la BOM « {code} » ?") \
+            .classes("text-base font-medium")
+        ui.label("Cette action supprime aussi toutes ses lignes. "
+                  "Le stock des pièces n'est PAS modifié.") \
+            .classes("text-sm text-gray-600 max-w-[400px]")
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            ui.button(_("Cancel"), on_click=d.close).props("flat")
+            def confirm():
+                ok, msg = delete_bom_db(bom_id)
+                ui.notify(msg, type="positive" if ok else "negative")
+                d.close()
+                if ok:
+                    on_done()
+            ui.button(_("Delete"), on_click=confirm) \
+                .props("color=negative")
+    d.open()
+
+
+def open_bom_stock_dialog(bom_id: int, direction: str, on_done):
+    """Mini-dialogue qui demande le facteur (combien de fois appliquer
+    la BOM) puis applique. direction='add' ou 'sub'."""
+    is_add = (direction == "add")
+    title = "Ajouter au stock" if is_add else "Retirer du stock"
+    verb_color = "positive" if is_add else "warning"
+
+    detail = fetch_bom_detail(bom_id)
+    if detail is None:
+        ui.notify("BOM introuvable.", type="negative")
+        return
+    if not detail["lines"]:
+        ui.notify("Cette BOM est vide.", type="warning")
+        return
+
+    with ui.dialog() as d, ui.card().classes("min-w-[440px]"):
+        ui.label(f"{title} — BOM {detail['code']}") \
+            .classes("text-lg font-medium")
+        ui.label("Combien de fois ?").classes("text-sm text-gray-600")
+        factor_input = ui.number(value=1, min=1, step=1, format="%d") \
+            .classes("w-full")
+        # Récap des changements à venir
+        ui.label("Conséquences sur le stock :").classes("text-sm font-medium mt-2")
+        recap = ui.column().classes("gap-1")
+        def refresh_recap():
+            recap.clear()
+            f = int(factor_input.value or 1)
+            sign = "+" if is_add else "−"
+            with recap:
+                for line in detail["lines"]:
+                    delta = line["quantity"] * f
+                    ui.label(f"  {sign}{delta} × {line['part_name']}") \
+                        .classes("text-xs font-mono text-gray-700")
+        factor_input.on("update:model-value", lambda _: refresh_recap())
+        refresh_recap()
+
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            ui.button(_("Cancel"), on_click=d.close).props("flat")
+            def confirm():
+                f = int(factor_input.value or 1)
+                ok, msg, shortages = bom_stock_apply(bom_id, f, direction)
+                if not ok and shortages:
+                    # Construit un message detaille des manques
+                    lines = [f"  • {s['part_name']} : besoin {s['needed']}, "
+                             f"dispo {s['available']} (manque {s['missing']})"
+                             for s in shortages]
+                    full_msg = f"{msg}\n" + "\n".join(lines)
+                    ui.notify(full_msg, type="negative",
+                               multi_line=True,
+                               position="center", timeout=8000)
+                    return
+                ui.notify(msg, type="positive" if ok else "negative")
+                if ok:
+                    d.close()
+                    on_done()
+            ui.button(_("Save"), on_click=confirm).props(f"color={verb_color}")
+    d.open()
+
+
+# ======================================================================
+#  DIALOGUE : ÉDITION DES LIGNES D'UNE BOM
+# ======================================================================
+def open_bom_edit_dialog(bom_id: int):
+    """Dialogue d'édition des lignes d'une BOM : ajouter, modifier
+    quantité (inline), supprimer."""
+    detail = fetch_bom_detail(bom_id)
+    if detail is None:
+        ui.notify("BOM introuvable.", type="negative")
+        return
+
+    # Charger toutes les pieces pour le selecteur d'ajout
+    parts = fetch_parts_full()
+
+    with ui.dialog() as dialog, ui.card().classes("min-w-[640px] max-w-[800px]"):
+        # En-tête : code + description
+        header_text = f"BOM {detail['code']}"
+        if detail["description"]:
+            header_text += f" — {detail['description']}"
+        ui.label(header_text).classes("text-lg font-medium")
+
+        # Liste des lignes
+        lines_container = ui.column().classes("w-full gap-1")
+
+        def render_lines():
+            """Recharge les données et redessine les lignes."""
+            nonlocal detail
+            detail = fetch_bom_detail(bom_id)
+            lines_container.clear()
+            if not detail["lines"]:
+                with lines_container:
+                    ui.label("Aucune ligne. Ajoutez une pièce ci-dessous.") \
+                        .classes("text-gray-500 text-sm text-center p-3")
+                return
+            for line in detail["lines"]:
+                with lines_container:
+                    render_line_row(line)
+
+        def render_line_row(line):
+            with ui.row().classes("w-full items-center gap-3 no-wrap "
+                                    "border-b border-gray-200 py-2"):
+                ui.label(line["part_name"]) \
+                    .classes("text-sm flex-grow")
+                # Quantité éditable
+                qty_input = ui.number(value=line["quantity"],
+                                       min=1, step=1, format="%d") \
+                    .classes("w-24")
+                # Sauvegarde sur perte de focus (.on('blur'))
+                def make_save(lid=line["id"], inp=qty_input):
+                    def handler():
+                        ok, msg = update_bom_line_db(lid,
+                                                       int(inp.value or 1))
+                        if not ok:
+                            ui.notify(msg, type="negative")
+                            render_lines()
+                    return handler
+                qty_input.on("blur", make_save())
+
+                # Bouton suppression
+                def make_del(lid=line["id"]):
+                    def handler():
+                        ok, msg = delete_bom_line_db(lid)
+                        ui.notify(msg, type="positive" if ok else "negative")
+                        if ok:
+                            render_lines()
+                    return handler
+                ui.button(icon="delete", on_click=make_del()) \
+                    .props("flat round dense color=negative")
+
+        # --- Formulaire d'ajout en bas -------------------------------
+        with ui.row().classes("w-full items-end gap-2 mt-3 "
+                                "border-t border-gray-200 pt-3"):
+            # Sélecteur de pièce (par id)
+            part_options = {p["id"]: p["part_name"] for p in parts}
+            part_select = ui.select(options=part_options,
+                                     label="Pièce", with_input=True) \
+                .classes("flex-grow")
+            qty_add = ui.number(label="Qté", value=1, min=1, step=1,
+                                 format="%d").classes("w-24")
+            def add_line():
+                pid = part_select.value
+                qty = int(qty_add.value or 1)
+                if pid is None:
+                    ui.notify("Sélectionnez une pièce.", type="warning")
+                    return
+                ok, msg = add_bom_line_db(bom_id, int(pid), qty)
+                ui.notify(msg, type="positive" if ok else "negative")
+                if ok:
+                    part_select.value = None
+                    qty_add.value = 1
+                    render_lines()
+            ui.button("+ Ajouter", on_click=add_line) \
+                .props("color=primary")
+
+        with ui.row().classes("w-full justify-end mt-3"):
+            ui.button(_("Close"), on_click=dialog.close).props("flat")
+
+        render_lines()
         dialog.open()
 
 

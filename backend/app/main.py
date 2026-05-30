@@ -22,6 +22,7 @@ from shutil import copyfileobj
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import SQLModel, Field, Session, create_engine, select
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pistock")
@@ -97,6 +98,24 @@ class Project(SQLModel, table=True):
     description: str | None = None
 
 
+class Bom(SQLModel, table=True):
+    __tablename__ = "bom"
+    id: int | None = Field(default=None, primary_key=True)
+    # Code BOM : B + 4 chiffres (B0001, B0002...). Incremental, unique.
+    code: str = Field(index=True, unique=True, max_length=5)
+    description: str | None = None
+    # Lien optionnel vers un projet.
+    id_project: int | None = Field(default=None, foreign_key="project.id")
+
+
+class BomLine(SQLModel, table=True):
+    __tablename__ = "bom_line"
+    id: int | None = Field(default=None, primary_key=True)
+    id_bom: int = Field(foreign_key="bom.id")
+    id_parts: int = Field(foreign_key="parts.id")
+    quantity: int = Field(default=1)
+
+
 # ----------------------------------------------------------------------
 #  HELPERS GENERATION DU CODE PROJET
 # ----------------------------------------------------------------------
@@ -140,6 +159,35 @@ def _next_project_code(session: Session) -> str:
             detail="Limite de codes projet atteinte (ZZZ)."
         )
     return _int_to_code(next_n)
+
+
+# ----------------------------------------------------------------------
+#  HELPER GENERATION CODE BOM
+# ----------------------------------------------------------------------
+# Format : 'B' + 4 chiffres zero-padded (B0001..B9999). L'ordre
+# alphabetique coincide avec l'ordre numerique grace au zero-padding,
+# donc on peut faire un MAX(code) en SQL.
+BOM_CODE_MAX = 9999
+
+
+def _next_bom_code(session: Session) -> str:
+    last = session.exec(
+        select(Bom.code).order_by(Bom.code.desc()).limit(1)
+    ).first()
+    if last is None:
+        return "B0001"
+    # Extrait la partie numerique (apres le 'B')
+    try:
+        n = int(last[1:])
+    except (ValueError, IndexError):
+        n = 0
+    n += 1
+    if n > BOM_CODE_MAX:
+        raise HTTPException(
+            status_code=507,
+            detail="Limite de codes BOM atteinte (B9999)."
+        )
+    return f"B{n:04d}"
 
 
 # ----------------------------------------------------------------------
@@ -239,6 +287,444 @@ def create_project(description: str = Form(default="")):
             "id": project.id,
             "code": project.code,
             "description": project.description,
+        }
+
+
+# ======================================================================
+#  ENDPOINTS BOM (Bill of Materials / nomenclatures)
+# ======================================================================
+@app.get("/api/v1/boms")
+def list_boms(project_code: str | None = None):
+    """Liste les BOMs. Chaque entree comprend le code, la description,
+    le projet associe (si rattachee), et le nombre de lignes."""
+    with Session(engine) as session:
+        query = select(Bom).order_by(Bom.code)
+        if project_code:
+            project = session.exec(
+                select(Project).where(Project.code == project_code)
+            ).first()
+            if project is None:
+                return []
+            query = query.where(Bom.id_project == project.id)
+        boms = session.exec(query).all()
+        # Pre-charge codes projet pour eviter une requete par BOM
+        projects_by_id = {
+            p.id: p.code
+            for p in session.exec(select(Project)).all()
+        }
+        result = []
+        for b in boms:
+            # Compte les lignes (sans charger les objets) pour rester
+            # leger sur la liste.
+            n_lines = session.exec(
+                select(BomLine).where(BomLine.id_bom == b.id)
+            ).all()
+            result.append({
+                "id": b.id,
+                "code": b.code,
+                "description": b.description,
+                "id_project": b.id_project,
+                "project_code": projects_by_id.get(b.id_project),
+                "line_count": len(n_lines),
+            })
+        return result
+
+
+@app.get("/api/v1/boms/{bom_id}")
+def get_bom(bom_id: int):
+    """Detail d'une BOM avec toutes ses lignes (id, part, qty)."""
+    with Session(engine) as session:
+        bom = session.get(Bom, bom_id)
+        if bom is None:
+            raise HTTPException(status_code=404,
+                                detail=f"BOM id={bom_id} introuvable.")
+        project = None
+        if bom.id_project is not None:
+            project = session.get(Project, bom.id_project)
+
+        lines = session.exec(
+            select(BomLine).where(BomLine.id_bom == bom_id)
+            .order_by(BomLine.id)
+        ).all()
+        # Pre-charge les parts pour eviter une requete par ligne
+        if lines:
+            part_ids = {l.id_parts for l in lines}
+            parts_by_id = {
+                p.id: p for p in session.exec(
+                    select(Parts).where(Parts.id.in_(part_ids))
+                ).all()
+            }
+        else:
+            parts_by_id = {}
+
+        return {
+            "id": bom.id,
+            "code": bom.code,
+            "description": bom.description,
+            "id_project": bom.id_project,
+            "project_code": project.code if project else None,
+            "lines": [
+                {
+                    "id": l.id,
+                    "id_parts": l.id_parts,
+                    "part_name": (parts_by_id[l.id_parts].part_name
+                                   if l.id_parts in parts_by_id else None),
+                    "quantity": l.quantity,
+                }
+                for l in lines
+            ],
+        }
+
+
+@app.post("/api/v1/boms")
+def create_bom(description: str = Form(default=""),
+                id_project: int | None = Form(default=None)):
+    """Cree une BOM avec un code auto-genere (B0001, B0002...)."""
+    description = (description or "").strip() or None
+    with Session(engine) as session:
+        if id_project is not None:
+            if session.get(Project, id_project) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Projet id={id_project} introuvable."
+                )
+        code = _next_bom_code(session)
+        bom = Bom(code=code, description=description, id_project=id_project)
+        session.add(bom)
+        session.commit()
+        session.refresh(bom)
+        logger.info(f"BOM '{code}' creee (id={bom.id}).")
+        return {
+            "status": "success",
+            "id": bom.id,
+            "code": bom.code,
+            "description": bom.description,
+            "id_project": bom.id_project,
+        }
+
+
+@app.delete("/api/v1/boms/{bom_id}")
+def delete_bom(bom_id: int):
+    """Supprime une BOM ET toutes ses lignes (suppression en cascade
+    geree manuellement puisque SQLite n'enforce pas les FK par defaut)."""
+    with Session(engine) as session:
+        bom = session.get(Bom, bom_id)
+        if bom is None:
+            raise HTTPException(status_code=404,
+                                detail=f"BOM id={bom_id} introuvable.")
+        # Cascade manuelle
+        lines = session.exec(
+            select(BomLine).where(BomLine.id_bom == bom_id)
+        ).all()
+        for line in lines:
+            session.delete(line)
+        session.delete(bom)
+        session.commit()
+        logger.info(f"BOM '{bom.code}' supprimee ({len(lines)} lignes).")
+        return {"status": "success", "deleted_id": bom_id,
+                "lines_removed": len(lines)}
+
+
+@app.post("/api/v1/boms/{bom_id}/lines")
+def add_bom_line(bom_id: int,
+                  part_id: int = Form(...),
+                  quantity: int = Form(default=1)):
+    """Ajoute une ligne (part + quantite) a une BOM. Si la part est
+    deja presente dans la BOM, la quantite est CUMULEE (plutot que de
+    remplacer ou refuser) : commportement le plus utile en pratique."""
+    if quantity <= 0:
+        raise HTTPException(status_code=400,
+                            detail="La quantité doit être > 0.")
+    with Session(engine) as session:
+        bom = session.get(Bom, bom_id)
+        if bom is None:
+            raise HTTPException(status_code=404,
+                                detail=f"BOM id={bom_id} introuvable.")
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Pièce id={part_id} introuvable.")
+        # Ligne deja presente ?
+        existing = session.exec(
+            select(BomLine)
+            .where(BomLine.id_bom == bom_id)
+            .where(BomLine.id_parts == part_id)
+        ).first()
+        if existing:
+            existing.quantity += quantity
+            session.add(existing)
+            session.commit()
+            return {"status": "success", "id": existing.id,
+                    "quantity": existing.quantity, "merged": True}
+
+        line = BomLine(id_bom=bom_id, id_parts=part_id, quantity=quantity)
+        session.add(line)
+        session.commit()
+        session.refresh(line)
+        return {"status": "success", "id": line.id,
+                "quantity": line.quantity, "merged": False}
+
+
+@app.put("/api/v1/boms/{bom_id}/lines/{line_id}")
+def update_bom_line(bom_id: int, line_id: int,
+                     quantity: int = Form(...)):
+    """Met a jour la quantite d'une ligne BOM."""
+    if quantity <= 0:
+        raise HTTPException(status_code=400,
+                            detail="La quantité doit être > 0.")
+    with Session(engine) as session:
+        line = session.get(BomLine, line_id)
+        if line is None or line.id_bom != bom_id:
+            raise HTTPException(status_code=404,
+                                detail="Ligne BOM introuvable.")
+        line.quantity = quantity
+        session.add(line)
+        session.commit()
+        return {"status": "success", "id": line.id, "quantity": quantity}
+
+
+@app.delete("/api/v1/boms/{bom_id}/lines/{line_id}")
+def delete_bom_line(bom_id: int, line_id: int):
+    """Supprime une ligne d'une BOM."""
+    with Session(engine) as session:
+        line = session.get(BomLine, line_id)
+        if line is None or line.id_bom != bom_id:
+            raise HTTPException(status_code=404,
+                                detail="Ligne BOM introuvable.")
+        session.delete(line)
+        session.commit()
+        return {"status": "success", "deleted_id": line_id}
+
+
+@app.post("/api/v1/boms/{bom_id}/stock-add")
+def bom_stock_add(bom_id: int, factor: int = Form(default=1)):
+    """Ajoute 'factor' fois la BOM au stock : pour chaque ligne,
+    on incremente la quantite stock de (line.quantity * factor).
+    Cree la ligne stock si absente. Atomique : tout ou rien."""
+    if factor <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Le facteur doit être > 0.")
+    with Session(engine) as session:
+        bom = session.get(Bom, bom_id)
+        if bom is None:
+            raise HTTPException(status_code=404,
+                                detail=f"BOM id={bom_id} introuvable.")
+        lines = session.exec(
+            select(BomLine).where(BomLine.id_bom == bom_id)
+        ).all()
+        if not lines:
+            raise HTTPException(status_code=400,
+                                detail="La BOM est vide.")
+
+        # Applique les increments
+        changes = []
+        for line in lines:
+            stock = _get_or_create_stock(session, line.id_parts)
+            delta = line.quantity * factor
+            stock.quantity += delta
+            session.add(stock)
+            changes.append({
+                "id_parts": line.id_parts,
+                "delta": delta,
+                "new_quantity": stock.quantity,
+            })
+        session.commit()
+        logger.info(f"BOM '{bom.code}' ajoutee x{factor} au stock "
+                    f"({len(changes)} pieces affectees).")
+        return {"status": "success", "factor": factor, "changes": changes}
+
+
+@app.post("/api/v1/boms/{bom_id}/stock-sub")
+def bom_stock_sub(bom_id: int, factor: int = Form(default=1)):
+    """Retire 'factor' fois la BOM du stock. ATOMIQUE : si une seule
+    piece n'a pas assez de stock, on REFUSE tout et on renvoie la
+    liste des manques (status 409 Conflict). Pas de retrait partiel."""
+    if factor <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Le facteur doit être > 0.")
+    with Session(engine) as session:
+        bom = session.get(Bom, bom_id)
+        if bom is None:
+            raise HTTPException(status_code=404,
+                                detail=f"BOM id={bom_id} introuvable.")
+        lines = session.exec(
+            select(BomLine).where(BomLine.id_bom == bom_id)
+        ).all()
+        if not lines:
+            raise HTTPException(status_code=400,
+                                detail="La BOM est vide.")
+
+        # Phase 1 : verifier que TOUT est disponible. On accumule les
+        # manques pour un message d'erreur exhaustif (l'utilisateur
+        # voit d'un coup tout ce qui bloque).
+        shortages = []
+        for line in lines:
+            stock = session.exec(
+                select(Stock).where(Stock.id_parts == line.id_parts)
+            ).first()
+            current = stock.quantity if stock else 0
+            needed = line.quantity * factor
+            if current < needed:
+                part = session.get(Parts, line.id_parts)
+                shortages.append({
+                    "id_parts": line.id_parts,
+                    "part_name": part.part_name if part else "?",
+                    "needed": needed,
+                    "available": current,
+                    "missing": needed - current,
+                })
+        if shortages:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Stock insuffisant pour cette BOM.",
+                    "shortages": shortages,
+                }
+            )
+
+        # Phase 2 : appliquer les decrements
+        changes = []
+        for line in lines:
+            stock = _get_or_create_stock(session, line.id_parts)
+            delta = -(line.quantity * factor)
+            stock.quantity += delta
+            session.add(stock)
+            changes.append({
+                "id_parts": line.id_parts,
+                "delta": delta,
+                "new_quantity": stock.quantity,
+            })
+        session.commit()
+        logger.info(f"BOM '{bom.code}' retiree x{factor} du stock "
+                    f"({len(changes)} pieces affectees).")
+        return {"status": "success", "factor": factor, "changes": changes}
+
+
+# ----------------------------------------------------------------------
+#  ENDPOINT : creation atomique d'une BOM a partir d'un assemblage
+# ----------------------------------------------------------------------
+# Recoit un JSON contenant : description, id_project optionnel, et une
+# liste de lignes {name, quantity, use_existing_id?}. Pour chaque ligne :
+#   - si use_existing_id fourni : on l'utilise direct
+#   - sinon, on cherche une piece existante avec ce nom : si trouvee,
+#     on l'utilise ; sinon, on cree une nouvelle piece.
+# Tout est fait dans UNE transaction : si quoi que ce soit echoue
+# (nom invalide, ID inexistant), RIEN n'est cree.
+
+class BomFromAssemblyLine(BaseModel):
+    name: str
+    quantity: int
+    use_existing_id: int | None = None
+
+
+class BomFromAssemblyRequest(BaseModel):
+    description: str = ""
+    id_project: int | None = None
+    lines: list[BomFromAssemblyLine]
+
+
+@app.post("/api/v1/boms/from-assembly")
+def create_bom_from_assembly(req: BomFromAssemblyRequest):
+    """Cree une BOM avec ses lignes a partir d'un scan d'assemblage.
+    Cree au passage les pieces qui n'existent pas encore. Atomique :
+    tout ou rien."""
+    if not req.lines:
+        raise HTTPException(status_code=400,
+                            detail="La liste des lignes est vide.")
+    description = (req.description or "").strip() or None
+
+    # Pre-merge cote serveur : si plusieurs lignes ont le meme nom
+    # (cas pas impossible si la macro envoie a la fois des doublons et
+    # des Links separes), on cumule les quantites. Le merge se fait
+    # par cle = use_existing_id si fourni, sinon par nom.
+    merged: dict[tuple, int] = {}
+    for line in req.lines:
+        if line.quantity <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Quantité invalide pour '{line.name}' : "
+                       f"{line.quantity}"
+            )
+        key = ("id", line.use_existing_id) if line.use_existing_id \
+              else ("name", line.name)
+        merged[key] = merged.get(key, 0) + line.quantity
+
+    with Session(engine) as session:
+        # Verifie le projet si specifie
+        if req.id_project is not None:
+            if session.get(Project, req.id_project) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Projet id={req.id_project} introuvable."
+                )
+
+        # Phase 1 : resoudre toutes les lignes en (part_id, qty),
+        # en creant les pieces manquantes au passage. On accumule
+        # dans une liste pour la phase 2.
+        resolved: list[tuple[int, int]] = []  # [(part_id, qty), ...]
+        created_parts: list[dict] = []        # pour le rapport final
+
+        for key, qty in merged.items():
+            if key[0] == "id":
+                part_id = key[1]
+                part = session.get(Parts, part_id)
+                if part is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Pièce id={part_id} introuvable "
+                               f"(mapping explicite)."
+                    )
+                resolved.append((part.id, qty))
+            else:
+                name = key[1].strip()
+                if not name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Nom de pièce vide dans la liste."
+                    )
+                # Cherche par nom exact
+                existing = session.exec(
+                    select(Parts).where(Parts.part_name == name)
+                ).first()
+                if existing is not None:
+                    resolved.append((existing.id, qty))
+                else:
+                    # Cree la piece (Parts vide, sans CAO, sans projet)
+                    new_part = Parts(part_name=name)
+                    session.add(new_part)
+                    session.flush()  # pour avoir new_part.id
+                    resolved.append((new_part.id, qty))
+                    created_parts.append({
+                        "id": new_part.id,
+                        "part_name": new_part.part_name,
+                    })
+
+        # Phase 2 : cree la BOM et ses lignes
+        try:
+            code = _next_bom_code(session)
+        except HTTPException:
+            raise  # 507 sur dépassement BOM_CODE_MAX
+
+        bom = Bom(code=code, description=description,
+                   id_project=req.id_project)
+        session.add(bom)
+        session.flush()
+
+        for part_id, qty in resolved:
+            session.add(BomLine(id_bom=bom.id, id_parts=part_id,
+                                 quantity=qty))
+
+        session.commit()
+        session.refresh(bom)
+        logger.info(f"BOM '{code}' creee depuis assemblage "
+                    f"({len(resolved)} lignes, "
+                    f"{len(created_parts)} pieces creees).")
+        return {
+            "status": "success",
+            "id": bom.id,
+            "code": bom.code,
+            "lines_created": len(resolved),
+            "parts_created": created_parts,
         }
 
 
