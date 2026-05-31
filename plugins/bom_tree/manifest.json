@@ -1,0 +1,8 @@
+{
+  "id": "bom_tree",
+  "name": "BOM dépliée",
+  "version": "0.1.0",
+  "author": "GA3Dtech",
+  "description": "Visualisation hiérarchique des BOMs avec arbre déplié et totaux par pièce feuille.",
+  "icon": "🌳"
+}
