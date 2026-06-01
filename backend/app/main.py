@@ -24,7 +24,7 @@ from shutil import copyfileobj
 from fastapi import (FastAPI, UploadFile, File, Form, HTTPException,
                       Header, Depends)
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import SQLModel, Field, Session, create_engine, select
+from sqlmodel import SQLModel, Session, create_engine, select
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
@@ -49,93 +49,13 @@ app = FastAPI(title="PiStock PLM Receiver")
 # ----------------------------------------------------------------------
 #  MODELES
 # ----------------------------------------------------------------------
-# IMPORTANT : ces modèles doivent rester cohérents avec init_db.py.
-class Parts(SQLModel, table=True):
-    __tablename__ = "parts"
-    id: int | None = Field(default=None, primary_key=True)
-    part_name: str = Field(index=True, unique=True)
-    # Lien optionnel vers un projet. Voir init_db.py pour le detail.
-    id_project: int | None = Field(default=None, foreign_key="project.id")
-    status: str = Field(default="Init")
-    locked: bool = Field(default=False)
-
-
-class PLM(SQLModel, table=True):
-    __tablename__ = "plm"
-    id: int | None = Field(default=None, primary_key=True)
-    id_parts: int = Field(foreign_key="parts.id")
-    path_2_cadfile: str | None = None
-    path_2_thumbnail: str | None = None
-    path_2_3dglb: str | None = None
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
-    author: str | None = None
-    # Numero de version (aa..zz), incremente par piece a chaque
-    # nouvelle revision. Geree automatiquement cote serveur.
-    version: str = Field(default="aa", max_length=2)
-    # Flag "revision principale" : si True, c'est cette revision qui
-    # est affichee. Sinon, fallback sur la plus recente par timestamp.
-    is_main: bool = Field(default=False)
-
-
-class Stock(SQLModel, table=True):
-    __tablename__ = "stock"
-    id: int | None = Field(default=None, primary_key=True)
-    id_parts: int = Field(foreign_key="parts.id")
-    path_2_img: str | None = None
-    quantity: int = Field(default=0)
-    location: str | None = None
-    supply: str | None = None
-    # Fiche composant (PDF, datasheet...) dans uploads/doc/
-    path_2_doc: str | None = None
-
-
-class Project(SQLModel, table=True):
-    __tablename__ = "project"
-    id: int | None = Field(default=None, primary_key=True)
-    # Code alphabetique a 3 lettres (AAA, AAB...), incremente
-    # automatiquement par le serveur. Unique : sert d'identifiant
-    # lisible pour l'utilisateur.
-    code: str = Field(index=True, unique=True, max_length=3)
-    description: str | None = None
-
-
-class Bom(SQLModel, table=True):
-    __tablename__ = "bom"
-    id: int | None = Field(default=None, primary_key=True)
-    # Code BOM : B + 4 chiffres (B0001, B0002...). Incremental, unique.
-    code: str = Field(index=True, unique=True, max_length=5)
-    description: str | None = None
-    # Lien optionnel vers un projet.
-    id_project: int | None = Field(default=None, foreign_key="project.id")
-
-
-class BomLine(SQLModel, table=True):
-    __tablename__ = "bom_line"
-    id: int | None = Field(default=None, primary_key=True)
-    id_bom: int = Field(foreign_key="bom.id")
-    # Exactement UN des deux est non-null (contrainte applicative)
-    id_parts: int | None = Field(default=None, foreign_key="parts.id")
-    id_subbom: int | None = Field(default=None, foreign_key="bom.id")
-    quantity: int = Field(default=1)
-
-
-# Compte admin (singleton : on n'utilise jamais qu'une seule ligne,
-# id=1). Sert aux operations destructives (suppressions, deverrouillage).
-# Voir endpoints /api/v1/admin/* et helpers _check_admin_password /
-# _require_admin plus bas.
-class Admin(SQLModel, table=True):
-    __tablename__ = "admin"
-    id: int | None = Field(default=None, primary_key=True)
-    salt: str            # 16 octets aleatoires, en hex
-    password_hash: str   # PBKDF2-HMAC-SHA256, 200_000 iter, en hex
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    updated_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+# Le schema de la base est defini dans model.py (SOURCE UNIQUE DE
+# VERITE), partage avec init_db.py. On les re-exporte ici pour que le
+# reste du code — ainsi que l'UI et les plugins — puisse continuer a
+# faire `main.Parts`, `main.Bom`, etc.
+from model import (  # noqa: E402
+    Parts, PLM, Stock, Project, Bom, BomLine, Admin,
+)
 
 
 # ----------------------------------------------------------------------

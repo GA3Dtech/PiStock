@@ -15,8 +15,23 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
-from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, create_engine
+import sys
+
+from sqlmodel import SQLModel, create_engine
+
+# Le schema des tables vit dans backend/app/model.py (SOURCE UNIQUE DE
+# VERITE, partagee avec le serveur main.py). On l'ajoute au path puis on
+# importe les modeles : leur simple import les enregistre dans la
+# metadata SQLModel, ce qui suffit a create_all() pour creer les tables.
+_APP_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+)
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+from model import (  # noqa: E402,F401
+    Parts, PLM, Stock, Project, Bom, BomLine, Admin,
+)
+
 
 def setup_pistock_environment():
     print("==================================================")
@@ -43,92 +58,10 @@ def setup_pistock_environment():
         os.makedirs(folder, exist_ok=True)
         print(f"   ✔️  Created: ...{os.path.relpath(folder, data_dir)}")
 
-    # 3. Define SQLModel Schemas (Your 3 tables)
-    class Parts(SQLModel, table=True):
-        __tablename__ = "parts"
-        id: int | None = Field(default=None, primary_key=True)
-        part_name: str = Field(index=True, unique=True)
-        # Lien optionnel vers un projet. Nullable car une piece peut
-        # exister sans projet (legacy ou pieces standalone).
-        id_project: int | None = Field(default=None,
-                                        foreign_key="project.id")
-        # Statut de maturite de la piece : 'Init' (en cours), 'Revue'
-        # (en relecture), 'Asset' (validee, prete pour usage prod).
-        status: str = Field(default="Init")
-        # Verrou : quand True, l'UI empeche les modifications (projet,
-        # statut). N'empeche PAS les uploads de nouvelles revisions
-        # via la macro FreeCAD (sinon trop restrictif pour un PLM).
-        locked: bool = Field(default=False)
-
-    class PLM(SQLModel, table=True):
-        __tablename__ = "plm"
-        id: int | None = Field(default=None, primary_key=True)
-        id_parts: int = Field(foreign_key="parts.id", nullable=False)
-        path_2_cadfile: str | None = Field(default=None)
-        path_2_thumbnail: str | None = Field(default=None)
-        path_2_3dglb: str | None = Field(default=None)
-        timestamp: datetime = Field(
-            default_factory=lambda: datetime.now(timezone.utc)
-        )
-        author: str | None = Field(default=None)
-        # Numero de version : deux lettres minuscules, aa->zz (676 max).
-        # Incremente automatiquement a chaque nouvelle revision PLM
-        # POUR UNE PIECE DONNEE. Premier push d'une piece = 'aa'.
-        version: str = Field(default="aa", max_length=2)
-        # Flag "revision principale" : si une revision est marquee
-        # is_main=True, c'est elle qui s'affiche partout (au lieu de
-        # la plus recente par timestamp, qui reste le fallback).
-        is_main: bool = Field(default=False)
-
-    class Stock(SQLModel, table=True):
-        __tablename__ = "stock"
-        id: int | None = Field(default=None, primary_key=True)
-        # Link directly to the primary key of the parts table
-        id_parts: int = Field(foreign_key="parts.id", nullable=False)
-        path_2_img: str | None = Field(default=None)
-        quantity: int = Field(default=0)
-        location: str | None = Field(default=None)
-        supply: str | None = Field(default=None)
-        # Chemin vers la fiche composant (PDF, datasheet...) stockee
-        # dans data-pistock/uploads/doc/.
-        path_2_doc: str | None = Field(default=None)
-
-    class Project(SQLModel, table=True):
-        __tablename__ = "project"
-        id: int | None = Field(default=None, primary_key=True)
-        # Code alphabetique a 3 lettres majuscules, incremental :
-        # AAA, AAB, ..., AAZ, ABA, ..., ZZZ. Unique car il sert
-        # d'identifiant lisible (visible dans l'UI).
-        code: str = Field(index=True, unique=True, max_length=3)
-        # Description libre, multi-lignes. Optionnelle.
-        description: str | None = Field(default=None)
-
-    class Bom(SQLModel, table=True):
-        __tablename__ = "bom"
-        id: int | None = Field(default=None, primary_key=True)
-        # Code BOM : B + 4 chiffres zero-padded (B0001, B0002, ...).
-        # Incremental, unique, lisible.
-        code: str = Field(index=True, unique=True, max_length=5)
-        # Description libre.
-        description: str | None = Field(default=None)
-        # Lien optionnel vers un projet : une BOM peut etre rattachee
-        # a un projet (la BOM d'un produit) ou exister independamment.
-        id_project: int | None = Field(default=None,
-                                        foreign_key="project.id")
-
-    class BomLine(SQLModel, table=True):
-        __tablename__ = "bom_line"
-        id: int | None = Field(default=None, primary_key=True)
-        id_bom: int = Field(foreign_key="bom.id", nullable=False)
-        # Exactement UN des deux champs suivants doit etre renseigne :
-        # - id_parts : ligne pour une piece (cas standard)
-        # - id_subbom : ligne pour une sous-BOM (assemblage hierarchique)
-        # La contrainte est appliquee cote applicatif.
-        id_parts: int | None = Field(default=None, foreign_key="parts.id")
-        id_subbom: int | None = Field(default=None, foreign_key="bom.id")
-        # Quantite necessaire de cette piece ou sous-BOM pour assembler
-        # une unite de la BOM parente.
-        quantity: int = Field(default=1)
+    # 3. Le schema des tables (Parts, PLM, Stock, Project, Bom, BomLine,
+    #    Admin) est importe depuis model.py en haut de ce fichier. Le
+    #    simple import a enregistre les classes dans la metadata
+    #    SQLModel ; create_all() ci-dessous cree donc toutes les tables.
 
     # 4. Initialize SQLite Database Engine
     db_path = os.path.join(data_dir, "pistockdatabase.sqlite3")
