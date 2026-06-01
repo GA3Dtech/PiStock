@@ -75,3 +75,7 @@ Thumbs.db
 # Certificats TLS locaux (clés privées, ne jamais committer)
 *.pem
 *.key
+
+# Config locale par machine (les templates .example sont versionnes)
+/pistock.conf
+backend/CAD-extensions/freecad/pistock_host.txt
