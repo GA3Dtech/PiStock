@@ -29,7 +29,7 @@ from i18n import _, set_lang, get_lang, AVAILABLE_LANGS
 from app_core import (_apply_user_lang, _register_pwa)
 from components.header import render_app_header
 from components.admin import (_admin_configured, _open_admin_setup_dialog, _ensure_admin)
-from db import (fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db)
+from db import (UNASSIGNED, fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db)
 
 
 # ======================================================================
@@ -361,7 +361,7 @@ def dashboard_page():
 
         def refresh_project_filter():
             """Reload the options of the project filter dropdown."""
-            options = {"": _("All projects")}
+            options = {"": _("All projects"), UNASSIGNED: _("(No project)")}
             for proj in fetch_projects():
                 options[proj["code"]] = f"{proj['code']} — {proj['description'] or _('(no description)')}"
             # Keep the current value if it is still valid
@@ -386,7 +386,9 @@ def dashboard_page():
             if not parts:
                 msg = _("No part in the database yet. "
                         "Click « + New part » or export one from FreeCAD.")
-                if code:
+                if code == UNASSIGNED:
+                    msg = _("No unassigned part.")
+                elif code:
                     msg = _("No part for project '{code}'.").format(code=code)
                 with list_container:
                     ui.label(msg) \
@@ -1497,7 +1499,25 @@ def open_bom_edit_dialog(bom_id: int):
             b["id"]: f"{b['code']} — {(b['description'] or '')[:30]}"
             for b in other_boms
         }
-        part_options = {p["id"]: p["part_name"] for p in parts}
+        def parts_for(code):
+            """Part options ({id: name}) filtered by project code,
+            UNASSIGNED (no project), or "" / None (all)."""
+            if code == UNASSIGNED:
+                sel = [p for p in parts if p["id_project"] is None]
+            elif code:
+                sel = [p for p in parts if p["project_code"] == code]
+            else:
+                sel = parts
+            return {p["id"]: p["part_name"] for p in sel}
+
+        # Project options for the part filter: only the projects that
+        # actually have parts, plus "all" and (if relevant) "no project".
+        part_proj_options = {"": _("All projects")}
+        if any(p["id_project"] is None for p in parts):
+            part_proj_options[UNASSIGNED] = _("(No project)")
+        for _code in sorted({p["project_code"] for p in parts
+                             if p["project_code"]}):
+            part_proj_options[_code] = _code
 
         with ui.column().classes("w-full gap-2 mt-3 "
                                    "border-t border-gray-200 pt-3"):
@@ -1508,9 +1528,14 @@ def open_bom_edit_dialog(bom_id: int):
             ).props("dense")
 
             with ui.row().classes("w-full items-end gap-2"):
+                # Optional project filter to narrow the part choice
+                part_proj_filter = ui.select(
+                    options=part_proj_options, value="",
+                    label=_("Project")
+                ).classes("w-40")
                 # Part selector (visible by default)
                 part_select = ui.select(
-                    options=part_options,
+                    options=parts_for(""),
                     label=_("Part"), with_input=True
                 ).classes("flex-grow")
                 # Sub-BOM selector (hidden by default)
@@ -1523,8 +1548,16 @@ def open_bom_edit_dialog(bom_id: int):
                 qty_add = ui.number(label=_("Qty"), value=1, min=1, step=1,
                                      format="%d").classes("w-24")
 
+                def on_part_filter():
+                    # Re-filter the part dropdown by the chosen project
+                    part_select.options = parts_for(part_proj_filter.value)
+                    part_select.value = None
+                    part_select.update()
+                part_proj_filter.on_value_change(on_part_filter)
+
                 def on_type_change():
                     is_part = line_type_toggle.value == "part"
+                    part_proj_filter.set_visibility(is_part)
                     part_select.set_visibility(is_part)
                     subbom_select.set_visibility(not is_part)
                     # Reset the values to avoid confusion

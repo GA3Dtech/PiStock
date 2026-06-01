@@ -505,3 +505,6 @@ msgstr "🔒 gesperrt"
 msgid "🗑 Permanently delete this part…"
 msgstr "🗑 Dieses Teil dauerhaft löschen…"
 
+
+msgid "No unassigned part."
+msgstr "Kein nicht zugeordnetes Teil."

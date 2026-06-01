@@ -505,3 +505,6 @@ msgstr "🔒 verrouillée"
 msgid "🗑 Permanently delete this part…"
 msgstr "🗑 Supprimer définitivement cette pièce…"
 
+
+msgid "No unassigned part."
+msgstr "Aucune pièce non attribuée."

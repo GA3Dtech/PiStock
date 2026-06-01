@@ -505,3 +505,6 @@ msgstr "🔒 locked"
 msgid "🗑 Permanently delete this part…"
 msgstr "🗑 Permanently delete this part…"
 
+
+msgid "No unassigned part."
+msgstr "No unassigned part."

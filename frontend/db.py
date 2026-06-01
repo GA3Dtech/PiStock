@@ -81,15 +81,26 @@ def _db_project():
 # ======================================================================
 #  DATABASE ACCESS
 # ======================================================================
+# Sentinel value for the project filters: parts not attached to any
+# project. Cannot collide with a real project code (those are 3 letters
+# A-Z), so it is safe to pass through the same `project_code` argument.
+UNASSIGNED = "__none__"
+
+
 def fetch_parts_full(project_code: str | None = None):
     """Enriched list: for each part, latest PLM revision, stock info,
-    associated project, status, lock. Optional filter."""
+    associated project, status, lock. Optional filter.
+
+    'project_code' may be a real project code, None/"" (no filter), or
+    UNASSIGNED to keep only parts with no project."""
     engine, Parts, PLM, Stock, _ = _db()
     import main
     Project_cls = main.Project
     with Session(engine) as session:
         query = select(Parts).order_by(Parts.part_name)
-        if project_code:
+        if project_code == UNASSIGNED:
+            query = query.where(Parts.id_project.is_(None))
+        elif project_code:
             project = session.exec(
                 select(Project_cls).where(Project_cls.code == project_code)
             ).first()
