@@ -1,0 +1,8 @@
+{
+  "id": "db_admin",
+  "name": "Database admin",
+  "version": "0.1.0",
+  "author": "GA3Dtech",
+  "description": "Admin-gated backup tools: export the whole data-pistock (DB + files) to a target folder, import a database (with compatibility check + auto-backup), and merge another database into the current one (re-sync from a local copy).",
+  "icon": "🗄️"
+}
