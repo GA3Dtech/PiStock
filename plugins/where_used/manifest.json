@@ -1,0 +1,8 @@
+{
+  "id": "where_used",
+  "name": "Where used",
+  "version": "0.1.0",
+  "author": "GA3Dtech",
+  "description": "For a given part, list every BOM that uses it. Catalog-like view with project / name / status filters; click a part to see its BOMs in a side panel.",
+  "icon": "🔗"
+}
