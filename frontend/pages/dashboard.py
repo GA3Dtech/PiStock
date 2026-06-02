@@ -346,6 +346,21 @@ def dashboard_page():
                 on_change=lambda _: refresh_list()
             ).classes("min-w-[200px]")
 
+            # Keyword search (substring, case-insensitive) on the name.
+            search_input = ui.input(
+                label=_("Search"),
+                on_change=lambda _: refresh_list()
+            ).props("clearable dense").classes("min-w-[180px]")
+
+            # Status filter (Init / Revue / Asset). Raw status values are
+            # the domain vocabulary, kept as-is as option labels.
+            status_filter = ui.select(
+                options={"": _("All statuses"),
+                         "Init": "Init", "Revue": "Revue", "Asset": "Asset"},
+                value="",
+                on_change=lambda _: refresh_list()
+            ).props("dense").classes("min-w-[140px]")
+
             # Push the buttons to the right
             ui.element("div").classes("flex-grow")
 
@@ -378,18 +393,31 @@ def dashboard_page():
 
         def refresh_list():
             """Clear then re-fill the list from the database, applying
-            the project filter if one is selected."""
+            the project filter (server-side), then the keyword search and
+            status filter (client-side on the returned list)."""
             list_container.clear()
             code = project_filter.value or None
             parts = fetch_parts_full(project_code=code)
 
+            # Client-side refinement
+            term = (search_input.value or "").strip().lower()
+            status = status_filter.value or None
+            if term:
+                parts = [p for p in parts
+                         if term in (p["part_name"] or "").lower()]
+            if status:
+                parts = [p for p in parts if p["status"] == status]
+
             if not parts:
-                msg = _("No part in the database yet. "
-                        "Click « + New part » or export one from FreeCAD.")
-                if code == UNASSIGNED:
+                if term or status:
+                    msg = _("No matching part.")
+                elif code == UNASSIGNED:
                     msg = _("No unassigned part.")
                 elif code:
                     msg = _("No part for project '{code}'.").format(code=code)
+                else:
+                    msg = _("No part in the database yet. "
+                            "Click « + New part » or export one from FreeCAD.")
                 with list_container:
                     ui.label(msg) \
                         .classes("text-gray-500 text-center p-8")

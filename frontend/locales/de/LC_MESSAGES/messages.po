@@ -508,3 +508,15 @@ msgstr "🗑 Dieses Teil dauerhaft löschen…"
 
 msgid "No unassigned part."
 msgstr "Kein nicht zugeordnetes Teil."
+
+msgid "Search"
+msgstr "Suchen"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "All statuses"
+msgstr "Alle Status"
+
+msgid "No matching part."
+msgstr "Kein passendes Teil."

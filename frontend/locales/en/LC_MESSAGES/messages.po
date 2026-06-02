@@ -508,3 +508,15 @@ msgstr "🗑 Permanently delete this part…"
 
 msgid "No unassigned part."
 msgstr "No unassigned part."
+
+msgid "Search"
+msgstr "Search"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "All statuses"
+msgstr "All statuses"
+
+msgid "No matching part."
+msgstr "No matching part."

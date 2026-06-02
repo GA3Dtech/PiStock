@@ -508,3 +508,15 @@ msgstr "🗑 Supprimer définitivement cette pièce…"
 
 msgid "No unassigned part."
 msgstr "Aucune pièce non attribuée."
+
+msgid "Search"
+msgstr "Rechercher"
+
+msgid "Status"
+msgstr "Statut"
+
+msgid "All statuses"
+msgstr "Tous les statuts"
+
+msgid "No matching part."
+msgstr "Aucune pièce ne correspond."
