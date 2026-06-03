@@ -1,0 +1,8 @@
+{
+  "id": "whiteboard",
+  "name": "Whiteboard",
+  "version": "0.1.0",
+  "author": "GA3Dtech",
+  "description": "Central sticky-note whiteboard: notes with a bold title, text, an attached image (photo of a sketch) and hashtags. Full-text search across content and hashtags. Supports several boards.",
+  "icon": "📌"
+}
