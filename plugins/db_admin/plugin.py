@@ -1,14 +1,18 @@
-# PiStock plugin — Database admin (backup / import / merge)
+# PiStock plugin — Database admin (backup / restore / new / merge)
 # Copyright (C) 2026 GA3Dtech — AGPLv3
 #
-# Admin-gated maintenance plugin. Three features:
+# Admin-gated maintenance plugin. Features:
 #   1. EXPORT  — copy the whole data-pistock folder (DB + uploads) to a
 #                target folder (server-side path, e.g. an external disk
 #                mounted on the Pi), into a timestamped subfolder.
-#   2. IMPORT  — replace the current database+files with another export.
-#                A compatibility check runs first; the current data is
-#                backed up (timestamped) before being replaced.
-#   3. MERGE   — integrate another database into the current one (e.g.
+#   2. IMPORT  — restore the database+files from another export. The
+#                current data is backed up (timestamped) first. An OLDER
+#                backup is accepted and AUTO-MIGRATED to the current
+#                schema (missing tables/columns are added with their
+#                defaults — additive only, nothing is ever dropped).
+#   3. EMPTY   — back up the current data, then start over from a fresh,
+#                empty database (current schema); uploads are reset too.
+#   4. MERGE   — integrate another database into the current one (e.g.
 #                re-sync parts you added while working on a USB key).
 #                Policy (chosen by the maintainer):
 #                  - parts matched by name; existing parts keep their
@@ -64,8 +68,17 @@ T = {
         "pw_mismatch": "The two entries do not match.", "admin_ok": "Admin session started.",
         "export_title": "Export (backup)",
         "export_hint": "Copy the whole data-pistock (database + files) into a timestamped subfolder of the target folder.",
-        "import_title": "Import (replace)",
-        "import_hint": "Replace the current database and files with another export. The current data is backed up first.",
+        "import_title": "Restore (import)",
+        "import_hint": "Restore the database and files from another export. The current data is backed up first. An OLDER backup is accepted and auto-migrated to the current schema.",
+        "empty_title": "New empty database",
+        "empty_hint": "Back up the current data, then start over from an empty database (current schema). Uploaded files are reset (kept in the backup). The admin password is reset.",
+        "run_empty": "Create empty database",
+        "confirm_empty_t": "Confirm new empty database",
+        "confirm_empty_b": "This BACKS UP the current data, then REPLACES it with an EMPTY database. Uploads and the admin password are reset. Continue?",
+        "emptied": "Empty database created. Backup at: {path}. Reload recommended.",
+        "imported_migrated": "Restored and migrated to the current schema ({n} field(s)/table(s) added). Backup at: {path}. Reload recommended.",
+        "not_pistock": "This folder is not a PiStock database export.",
+        "migrate_note": "⚠ Older schema detected — it will be migrated to the current version on restore.",
         "merge_title": "Merge",
         "merge_hint": "Integrate another database into the current one: new parts (with revisions/stock/files) are added, missing revisions are appended to existing parts, projects & BOMs are re-coded and relinked.",
         "dest_folder": "Target folder (server-side path)",
@@ -110,8 +123,17 @@ T = {
         "pw_mismatch": "Les deux saisies ne correspondent pas.", "admin_ok": "Session admin démarrée.",
         "export_title": "Exporter (sauvegarde)",
         "export_hint": "Copie toute la data-pistock (base + fichiers) dans un sous-dossier horodaté du dossier cible.",
-        "import_title": "Importer (remplacer)",
-        "import_hint": "Remplace la base et les fichiers actuels par un autre export. Les données actuelles sont sauvegardées avant.",
+        "import_title": "Restaurer (importer)",
+        "import_hint": "Restaure la base et les fichiers depuis un autre export. Les données actuelles sont sauvegardées avant. Une ancienne sauvegarde est acceptée et migrée automatiquement vers le schéma courant.",
+        "empty_title": "Nouvelle base vide",
+        "empty_hint": "Sauvegarde les données actuelles, puis repart d'une base vide (schéma courant). Les fichiers envoyés sont réinitialisés (conservés dans la sauvegarde). Le mot de passe admin est réinitialisé.",
+        "run_empty": "Créer une base vide",
+        "confirm_empty_t": "Confirmer la nouvelle base vide",
+        "confirm_empty_b": "Ceci SAUVEGARDE les données actuelles, puis les REMPLACE par une base VIDE. Les fichiers et le mot de passe admin sont réinitialisés. Continuer ?",
+        "emptied": "Base vide créée. Sauvegarde dans : {path}. Rechargement recommandé.",
+        "imported_migrated": "Restauré et migré vers le schéma courant ({n} champ(s)/table(s) ajouté(s)). Sauvegarde : {path}. Rechargement recommandé.",
+        "not_pistock": "Ce dossier n'est pas un export de base PiStock.",
+        "migrate_note": "⚠ Ancien schéma détecté — il sera migré vers la version courante à la restauration.",
         "merge_title": "Fusionner",
         "merge_hint": "Intègre une autre base dans la base actuelle : les nouvelles pièces (avec révisions/stock/fichiers) sont ajoutées, les révisions manquantes sont complétées sur les pièces existantes, projets & BOMs sont ré-codés et reliés.",
         "dest_folder": "Dossier cible (chemin côté serveur)",
@@ -156,8 +178,17 @@ T = {
         "pw_mismatch": "Die beiden Eingaben stimmen nicht überein.", "admin_ok": "Admin-Sitzung gestartet.",
         "export_title": "Exportieren (Sicherung)",
         "export_hint": "Kopiert die gesamte data-pistock (DB + Dateien) in einen zeitgestempelten Unterordner des Zielordners.",
-        "import_title": "Importieren (ersetzen)",
-        "import_hint": "Ersetzt die aktuelle DB und Dateien durch einen anderen Export. Die aktuellen Daten werden zuvor gesichert.",
+        "import_title": "Wiederherstellen (importieren)",
+        "import_hint": "Stellt DB und Dateien aus einem anderen Export wieder her. Die aktuellen Daten werden zuvor gesichert. Eine ÄLTERE Sicherung wird akzeptiert und automatisch auf das aktuelle Schema migriert.",
+        "empty_title": "Neue leere Datenbank",
+        "empty_hint": "Sichert die aktuellen Daten und beginnt dann mit einer leeren Datenbank (aktuelles Schema). Hochgeladene Dateien werden zurückgesetzt (in der Sicherung erhalten). Das Admin-Passwort wird zurückgesetzt.",
+        "run_empty": "Leere Datenbank erstellen",
+        "confirm_empty_t": "Neue leere Datenbank bestätigen",
+        "confirm_empty_b": "Dies SICHERT die aktuellen Daten und ERSETZT sie durch eine LEERE Datenbank. Dateien und Admin-Passwort werden zurückgesetzt. Fortfahren?",
+        "emptied": "Leere Datenbank erstellt. Sicherung: {path}. Neuladen empfohlen.",
+        "imported_migrated": "Wiederhergestellt und auf das aktuelle Schema migriert ({n} Feld(er)/Tabelle(n) hinzugefügt). Sicherung: {path}. Neuladen empfohlen.",
+        "not_pistock": "Dieser Ordner ist kein PiStock-Datenbankexport.",
+        "migrate_note": "⚠ Älteres Schema erkannt — es wird bei der Wiederherstellung auf die aktuelle Version migriert.",
         "merge_title": "Zusammenführen",
         "merge_hint": "Führt eine andere DB in die aktuelle ein: neue Teile (mit Revisionen/Bestand/Dateien) werden hinzugefügt, fehlende Revisionen ergänzt, Projekte & Stücklisten neu codiert und verknüpft.",
         "dest_folder": "Zielordner (serverseitiger Pfad)",
@@ -306,11 +337,22 @@ def _stamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _unique(path):
+    """Return 'path' or, if it already exists, 'path-2', 'path-3'… so two
+    operations within the same second never collide."""
+    if not os.path.exists(path):
+        return path
+    i = 2
+    while os.path.exists(f"{path}-{i}"):
+        i += 1
+    return f"{path}-{i}"
+
+
 def export_data(data_dir, dest_root):
     """Copy data_dir into dest_root/pistock-export-<ts>. Returns (ok, msg)."""
     if not dest_root or not os.path.isdir(dest_root):
         return False, _tr("no_dest")
-    dest = os.path.join(dest_root, f"pistock-export-{_stamp()}")
+    dest = _unique(os.path.join(dest_root, f"pistock-export-{_stamp()}"))
     shutil.copytree(data_dir, dest)
     return True, _tr("exported", path=dest)
 
@@ -349,22 +391,112 @@ def export_workbench(dest_root):
     return True, msg
 
 
+def _is_pistock_db(info):
+    """True if the source looks like a PiStock database (at least one of
+    the expected tables is present)."""
+    present = set(EXPECTED_SCHEMA) - set(info.get("missing_tables", []))
+    return bool(present)
+
+
+def _add_column_sql(table, col, dialect):
+    """Build a safe 'ALTER TABLE ADD COLUMN' for a missing column. We emit
+    only the type (never NOT NULL) so SQLite adds it as nullable on
+    existing rows; a scalar default, if any, backfills those rows."""
+    typ = col.type.compile(dialect=dialect)
+    sql = f'ALTER TABLE "{table}" ADD COLUMN "{col.name}" {typ}'
+    d = col.default
+    if d is not None and getattr(d, "is_scalar", False):
+        val = d.arg
+        if isinstance(val, bool):
+            lit = "1" if val else "0"
+        elif isinstance(val, (int, float)):
+            lit = str(val)
+        else:
+            lit = "'" + str(val).replace("'", "''") + "'"
+        sql += f" DEFAULT {lit}"
+    return sql
+
+
+def _migrate_db(db_path):
+    """Bring an (older) PiStock database up to the CURRENT schema, in
+    place. Additive only: create missing tables (including loaded plugin
+    tables) and add missing columns with their default. Never drops
+    anything. Returns the list of applied column additions."""
+    import main  # noqa: F401 — ensures models + plugin tables are imported
+    from sqlmodel import SQLModel, create_engine
+    eng = create_engine(f"sqlite:///{db_path}")
+    applied = []
+    try:
+        # 1. Missing tables (additive, leaves existing tables untouched).
+        SQLModel.metadata.create_all(eng)
+        # 2. Missing columns on tables that already existed.
+        raw = eng.raw_connection()
+        try:
+            cur = raw.cursor()
+            for tname, table in SQLModel.metadata.tables.items():
+                cur.execute(f'PRAGMA table_info("{tname}")')
+                existing = {r[1] for r in cur.fetchall()}
+                if not existing:
+                    continue  # just created by create_all -> already complete
+                for col in table.columns:
+                    if col.name not in existing:
+                        cur.execute(_add_column_sql(tname, col, eng.dialect))
+                        applied.append(f"{tname}.{col.name}")
+            raw.commit()
+        finally:
+            raw.close()
+    finally:
+        eng.dispose()
+    return applied
+
+
 def import_data(data_dir, source_dir):
-    """Backup data_dir, then replace its DB + uploads from source_dir.
+    """Backup data_dir, then RESTORE its DB + uploads from source_dir. An
+    older backup is accepted and auto-migrated to the current schema.
     Returns (ok, msg)."""
+    import main
     src_db = os.path.join(source_dir, DB_NAME)
-    ok, info = _compat_check(src_db)
-    if not ok:
-        return False, _tr("incompatible")
-    backup = os.path.join(os.path.dirname(os.path.abspath(data_dir)),
-                          f"pistock-backup-{_stamp()}")
+    if not os.path.isfile(src_db):
+        return False, _tr("no_source")
+    _ok, info = _compat_check(src_db)
+    if not _is_pistock_db(info):
+        return False, _tr("not_pistock")
+    backup = _unique(os.path.join(os.path.dirname(os.path.abspath(data_dir)),
+                                  f"pistock-backup-{_stamp()}"))
     shutil.copytree(data_dir, backup)
+    main.engine.dispose()  # release the current DB file before replacing it
     shutil.copy2(src_db, os.path.join(data_dir, DB_NAME))
     src_up = os.path.join(source_dir, "uploads")
     if os.path.isdir(src_up):
         shutil.copytree(src_up, os.path.join(data_dir, "uploads"),
                         dirs_exist_ok=True)
+    applied = _migrate_db(os.path.join(data_dir, DB_NAME))
+    main.engine.dispose()  # reconnect to the freshly restored DB
+    if applied:
+        return True, _tr("imported_migrated", path=backup, n=len(applied))
     return True, _tr("imported", path=backup)
+
+
+def recreate_empty(data_dir):
+    """Back up data_dir, then reset to a brand-new empty database (current
+    schema). Uploaded files are reset too (preserved in the backup).
+    Returns (ok, msg)."""
+    import main
+    from sqlmodel import SQLModel
+    backup = _unique(os.path.join(os.path.dirname(os.path.abspath(data_dir)),
+                                  f"pistock-backup-{_stamp()}"))
+    shutil.copytree(data_dir, backup)
+    db = os.path.join(data_dir, DB_NAME)
+    main.engine.dispose()
+    if os.path.isfile(db):
+        os.remove(db)
+    SQLModel.metadata.create_all(main.engine)  # new file + current schema
+    up = os.path.join(data_dir, "uploads")
+    if os.path.isdir(up):
+        shutil.rmtree(up)
+    os.makedirs(up, exist_ok=True)
+    main.engine.dispose()
+    return True, _tr("emptied", path=backup)
 
 
 def _read_source(source_db):
@@ -738,26 +870,47 @@ def register(app):
                 def do_import():
                     src = (isrc.value or "").strip()
                     ok, info = _compat_check(os.path.join(src, DB_NAME))
-                    if not ok:
-                        ires.text = _tr("incompatible") + " " + _format_info(info)
+                    if not _is_pistock_db(info):
+                        ires.text = _tr("not_pistock")
                         ires.classes(replace="text-sm text-red-600")
-                        ui.notify(_tr("incompatible"), type="negative")
+                        ui.notify(_tr("not_pistock"), type="negative")
                         return
+                    # Older schema -> accepted, will be auto-migrated. Warn.
+                    body = _tr("confirm_import_b")
+                    if not ok:
+                        body += "\n\n" + _tr("migrate_note")
 
                     def really():
                         try:
                             ok2, msg = import_data(main.DATA_DIR, src)
-                            if ok2:
-                                main.engine.dispose()  # reconnect to new DB file
                         except Exception as e:  # noqa: BLE001
                             ok2, msg = False, str(e)
                         ires.text = msg
                         ires.classes(replace="text-sm " + ("text-green-700" if ok2 else "text-red-600"))
                         ui.notify(msg, type="positive" if ok2 else "negative")
                         dlg.close()
-                    dlg = _confirm_dialog(_tr("confirm_import_t"),
-                                          _tr("confirm_import_b"), really)
+                    dlg = _confirm_dialog(_tr("confirm_import_t"), body, really)
                 ui.button(_tr("run_import"), on_click=do_import).props("color=warning")
+
+            # --- NEW EMPTY DATABASE ---
+            with ui.card().classes("w-full p-4 gap-2"):
+                ui.label("🆕 " + _tr("empty_title")).classes("text-lg font-medium")
+                ui.label(_tr("empty_hint")).classes("text-sm text-gray-600")
+                eres = ui.label("").classes("text-sm")
+
+                def do_empty():
+                    def really():
+                        try:
+                            ok2, msg = recreate_empty(main.DATA_DIR)
+                        except Exception as e:  # noqa: BLE001
+                            ok2, msg = False, str(e)
+                        eres.text = msg
+                        eres.classes(replace="text-sm " + ("text-green-700" if ok2 else "text-red-600"))
+                        ui.notify(msg, type="positive" if ok2 else "negative")
+                        dlg.close()
+                    dlg = _confirm_dialog(_tr("confirm_empty_t"),
+                                          _tr("confirm_empty_b"), really)
+                ui.button(_tr("run_empty"), on_click=do_empty).props("color=negative")
 
             # --- MERGE ---
             with ui.card().classes("w-full p-4 gap-2"):
@@ -828,7 +981,7 @@ def register(app):
         from nicegui import ui
         with ui.dialog() as dlg, ui.card().classes("min-w-[420px]"):
             ui.label(title).classes("text-lg font-bold")
-            ui.label(body).classes("text-sm text-gray-700")
+            ui.label(body).classes("text-sm text-gray-700 whitespace-pre-line")
             with ui.row().classes("w-full justify-end gap-2 mt-2"):
                 ui.button(_tr("cancel"), on_click=dlg.close).props("flat")
                 ui.button(_tr("confirm_btn"), on_click=on_confirm) \
