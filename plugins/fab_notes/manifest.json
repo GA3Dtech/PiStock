@@ -1,0 +1,8 @@
+{
+  "id": "fab_notes",
+  "name": "Note de Fabrication",
+  "version": "0.1.0",
+  "author": "GA3Dtech",
+  "description": "Manufacturing notes attached to a part: bold title, text, hashtags and any attachment (images, PDF, gcode, STL…). Filter the board by project, part name, status or hashtag.",
+  "icon": "🛠️"
+}
