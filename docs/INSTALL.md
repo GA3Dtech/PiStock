@@ -33,8 +33,9 @@ cd pistock
 ```
 
 That's it. At the end the script prints the **LAN IP and URL** you need.
-Open `https://<PI_IP>:8000/` in a browser and accept the self-signed
-certificate warning.
+Open `https://<PI_IP>:8000/` in a browser and accept the certificate
+warning (or import the local CA for a clean, warning-free connection —
+see *Troubleshooting*).
 
 ### What the installer does
 
@@ -44,7 +45,7 @@ certificate warning.
 | 2 | Creates a Python virtualenv `.venv` and installs `requirements.txt` |
 | 3 | Initializes the database in `../data-pistock` (skipped if it exists) |
 | 4 | Writes `pistock.conf` with the **auto-detected LAN IP** and port 8000 |
-| 5 | Generates a self-signed TLS certificate (`key.pem`/`cert.pem`), once |
+| 5 | Generates a **local CA** (`ca-cert.pem`) + the server leaf (`key.pem`/`cert.pem`) it signs, once |
 | 6 | Installs and enables a **systemd** service → autostart on every boot |
 | 7 | Prints the IP/URL for the browser and the FreeCAD macros |
 
@@ -189,7 +190,22 @@ For autostart, replicate the systemd unit created by the installer
 - **A dependency tries to compile from source** (rare on 64-bit Pi OS):
   `sudo apt-get install -y build-essential python3-dev libssl-dev`, then
   re-run `pip install -r requirements.txt`.
-- **Certificate warning in the browser:** expected — it's a self-signed
-  certificate for your LAN. Accept it once.
+- **Certificate warning in the browser:** expected for a fresh LAN
+  setup — accept it once. To remove the warning entirely, import the
+  local CA `ca-cert.pem` (repo root) into your browser/OS trust store
+  as a **certificate authority** (Firefox: Settings → Privacy &
+  Security → Certificates → View Certificates → Authorities → Import).
+  Because the server leaf is re-signed by this CA, you only import it
+  **once**, even across future certificate renewals.
+- **Upgrading an existing install to the two-tier CA (one-time):** the
+  first run after the update creates `ca-cert.pem` and re-issues
+  `cert.pem`/`key.pem` as a leaf signed by it. FreeCAD machines that
+  were deployed **before** the update still carry the *old*
+  `pistock_ca.pem` and will fail verification until you redeploy the
+  **new** `pistock_ca.pem` (now the CA) to them — copy it from
+  `backend/CAD-extensions/.../pistock_workbench/pistock_ca.pem` (refreshed
+  automatically on server (re)start) onto each client's `Mod/PiStock`
+  workbench. This is the **last** redeploy needed: the CA lasts ~10
+  years, so later leaf rotations require no client changes.
 - **Restrict access to the workshop subnet (optional hardening):**
   `sudo ufw allow from 192.168.1.0/24 to any port 8000`.

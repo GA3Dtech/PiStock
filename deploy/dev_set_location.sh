@@ -70,16 +70,20 @@ if [ "$choice" = "2" ]; then
 
   read -rp "Fetch and TRUST that server's TLS certificate now? [y/N]: " yn
   if [ "${yn:-N}" = "y" ] || [ "${yn:-N}" = "Y" ]; then
-    if openssl s_client -connect "$ip:$port" -servername "$ip" </dev/null 2>/dev/null \
-         | openssl x509 > "$WB/pistock_ca.pem" 2>/dev/null && [ -s "$WB/pistock_ca.pem" ]; then
-      ok "fetched cert -> pistock_ca.pem (trust-on-first-use)"
+    # -showcerts grabs the FULL chain the server presents (leaf + CA).
+    # If the server uses the PiStock two-tier setup, its CA lands in the
+    # file too, so a later server-cert rotation keeps verifying.
+    if openssl s_client -showcerts -connect "$ip:$port" -servername "$ip" </dev/null 2>/dev/null \
+         | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' > "$WB/pistock_ca.pem" \
+         && [ -s "$WB/pistock_ca.pem" ]; then
+      ok "fetched cert chain -> pistock_ca.pem (trust-on-first-use)"
       warn "you trusted whatever the server presented — only do this on a network you trust"
     else
       rm -f "$WB/pistock_ca.pem"
-      warn "could not fetch the certificate (server down? wrong port?). Copy it manually if self-signed."
+      warn "could not fetch the certificate (server down? wrong port?). Copy its ca-cert.pem manually if self-signed."
     fi
   else
-    warn "if that server uses a self-signed cert, copy its cert.pem to $WB/pistock_ca.pem"
+    warn "if that server uses a self-signed setup, copy its ca-cert.pem to $WB/pistock_ca.pem"
   fi
   say "Done — FreeCAD macros now target https://$ip:$port"
   exit 0
@@ -105,19 +109,17 @@ else
   ok "pistock.conf created (IP=$ip PORT=$port)"
 fi
 
-# 2) regenerate the TLS cert for this IP (+127.0.0.1/localhost)
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
-  -days 825 -nodes \
-  -subj "/CN=$ip" \
-  -addext "subjectAltName=IP:$ip,DNS:$cur_dns,IP:127.0.0.1,DNS:localhost" 2>/dev/null
-chmod 600 key.pem
-ok "TLS certificate regenerated (CN=$ip, SAN incl. 127.0.0.1/localhost)"
+# 2) (re)issue the TLS material for this IP via the shared generator:
+#    a local CA (ca-cert.pem, created once) signs the server leaf
+#    (cert.pem/key.pem), SAN incl. 127.0.0.1/localhost.
+bash "$REPO_DIR/deploy/gen_certs.sh" "$REPO_DIR" "$ip" "$cur_dns"
+ok "TLS certificate regenerated (CN=$ip, SAN incl. 127.0.0.1/localhost, signed by local CA)"
 
-# 3) update the workbench (host + bundled CA)
+# 3) update the workbench (host + bundled CA = the local ROOT, not the leaf)
 if [ -d "$WB" ]; then
   printf '%s:%s\n' "$ip" "$port" > "$WB/pistock_host.txt"
-  cp -f cert.pem "$WB/pistock_ca.pem"
-  ok "workbench updated (host=$ip:$port, CA refreshed)"
+  cp -f ca-cert.pem "$WB/pistock_ca.pem"
+  ok "workbench updated (host=$ip:$port, local CA bundled)"
 fi
 
 # 4) offer to restart the service if it exists
@@ -132,4 +134,4 @@ else
 fi
 
 say "Done — local PiStock at https://$ip:$port"
-warn "On other FreeCAD machines, re-copy the workbench (cert changed)."
+warn "Other FreeCAD machines only need re-copying if the local CA (ca-cert.pem) was just created for the first time; a mere IP change keeps the same CA."

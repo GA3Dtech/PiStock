@@ -20,14 +20,12 @@ PISTOCK_DNS="${PISTOCK_DNS:-pistock.local}"
 
 cd "$PISTOCK_DIR"
 
-# 1. Generer un certificat valide pour l'IP/host configures.
-#    On inclut aussi 127.0.0.1 / localhost dans le SAN pour que les tests
-#    en local (sur la machine du serveur) passent la verification stricte.
-openssl req -x509 -newkey rsa:4096 \
-  -keyout key.pem -out cert.pem \
-  -days 365 -nodes \
-  -subj "/CN=${PISTOCK_IP}" \
-  -addext "subjectAltName=IP:${PISTOCK_IP},DNS:${PISTOCK_DNS},IP:127.0.0.1,DNS:localhost"
+# 1. (Re)generer le certificat serveur, signe par la CA locale PiStock.
+#    gen_certs.sh cree la CA (ca-cert.pem) une seule fois, puis emet a
+#    chaque lancement une feuille cert.pem/key.pem valide pour l'IP/host
+#    configures (SAN incluant aussi 127.0.0.1 / localhost pour les tests
+#    locaux). C'est ca-cert.pem qu'on fait confiance cote clients.
+bash "$PISTOCK_DIR/deploy/gen_certs.sh" "$PISTOCK_DIR" "$PISTOCK_IP" "$PISTOCK_DNS"
 
 # 1b. Rafraichir le certificat/adresse embarques dans le workbench FreeCAD
 #     pour qu'ils correspondent au cert qu'on vient de generer. Non bloquant.

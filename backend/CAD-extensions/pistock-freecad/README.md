@@ -13,7 +13,7 @@ pistock-freecad/
         ├── __init__.py
         ├── pistock_*.FCMacro      ← the 3 macros
         ├── pistock_host.txt(.example)   ← server address (filled at deploy)
-        ├── pistock_ca.pem         ← LAN TLS certificate (added at deploy)
+        ├── pistock_ca.pem         ← local root CA (added at deploy)
         └── resources/icons/*.svg
 ```
 
@@ -39,9 +39,11 @@ The commands read two files inside `freecad/pistock_workbench/`:
 
 - `pistock_host.txt` — the server IP/host on one line
   (e.g. `192.168.1.50:8000`). Copy `pistock_host.txt.example` if missing.
-- `pistock_ca.pem` — the server's TLS certificate, so the self-signed
-  LAN certificate is trusted (strict verification). With a real
-  certificate (e.g. Let's Encrypt) this file is not needed.
+- `pistock_ca.pem` — the PiStock **local root CA**, so the server's
+  LAN certificate is trusted (strict verification). Because the server
+  leaf is re-signed by this CA, rotating or changing the server cert
+  does **not** require redistributing this file. With a real certificate
+  (e.g. Let's Encrypt) this file is not needed.
 
 **The PiStock installer pre-fills both** (`deploy/install_pi.sh`). So
 after deployment: copy this folder to a USB stick → drop it in

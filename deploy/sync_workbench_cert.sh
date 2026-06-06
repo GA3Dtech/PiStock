@@ -4,8 +4,11 @@
 #  FreeCAD workbench, so the USB drop-in copy trusts THIS server out of
 #  the box.
 #
-#  It copies   cert.pem            -> workbench/pistock_ca.pem
-#  and writes  IP:PORT (from pistock.conf) -> workbench/pistock_host.txt
+#  It copies   ca-cert.pem (the local ROOT CA) -> workbench/pistock_ca.pem
+#  and writes  IP:PORT (from pistock.conf)      -> workbench/pistock_host.txt
+#
+#  (Bundling the CA rather than the server leaf means rotating/regenerating
+#   the server cert does NOT require re-syncing every workbench.)
 #
 #  Idempotent and safe to call from anywhere the cert is created or the
 #  server is (re)started: the installer, startapp.sh, startapp_newssl.sh.
@@ -21,7 +24,10 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO_DIR="${1:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 WB="$REPO_DIR/backend/CAD-extensions/pistock-freecad/freecad/pistock_workbench"
-CERT="$REPO_DIR/cert.pem"
+# Prefer the local ROOT CA; fall back to the leaf for legacy single-cert
+# installs that predate the two-tier PKI.
+CERT="$REPO_DIR/ca-cert.pem"
+[ -f "$CERT" ] || CERT="$REPO_DIR/cert.pem"
 CONF="$REPO_DIR/pistock.conf"
 
 if [ ! -d "$WB" ]; then
@@ -29,11 +35,12 @@ if [ ! -d "$WB" ]; then
   exit 0
 fi
 if [ ! -f "$CERT" ]; then
-  echo "  ! cert.pem not found ($CERT) — workbench CA not synced" >&2
+  echo "  ! no ca-cert.pem/cert.pem found in $REPO_DIR — workbench CA not synced" >&2
   exit 0
 fi
 
-# 1. Bundle the certificate as the workbench's trusted CA.
+# 1. Bundle the certificate (local CA when available) as the workbench's
+#    trusted anchor.
 cp -f "$CERT" "$WB/pistock_ca.pem"
 
 # 2. Server address: read pistock.conf (the source of truth the server

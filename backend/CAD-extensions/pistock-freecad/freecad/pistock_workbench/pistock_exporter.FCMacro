@@ -31,8 +31,8 @@ import ssl
 # Configuration : hote du serveur PiStock
 # On parle en HTTPS (TLS). La verification du certificat est TOUJOURS
 # active (voir build_ssl_context plus bas) : magasin de confiance
-# systeme par defaut, et pour un serveur LAN a certificat auto-signe,
-# on fait confiance proprement a son CA via pistock_ca.pem / PISTOCK_CA.
+# systeme par defaut, et pour un serveur LAN, on fait confiance
+# proprement a la CA locale PiStock via pistock_ca.pem / PISTOCK_CA.
 # ----------------------------------------------------------------------
 #  Adresse du serveur PiStock : lue depuis pistock_host.txt
 # ----------------------------------------------------------------------
@@ -90,10 +90,11 @@ def build_ssl_context():
     Certificate verification is ALWAYS on (there is no insecure mode):
       - by default, the system trust store (strict verification) — all
         you need with a real certificate (e.g. Let's Encrypt) in prod;
-      - to trust a LAN server using a SELF-SIGNED certificate, drop the
-        server's PEM next to this macro as 'pistock_ca.pem', or set the
+      - to trust a LAN server using PiStock's local CA, drop that CA
+        (ca-cert.pem) next to this macro as 'pistock_ca.pem', or set the
         PISTOCK_CA environment variable to its path. It is then trusted
-        cleanly via load_verify_locations().
+        cleanly via load_verify_locations(); the server leaf, re-signed
+        by that CA, keeps validating without redistributing this file.
     """
     context = ssl.create_default_context()
     ca_file = os.environ.get("PISTOCK_CA") or os.path.join(
