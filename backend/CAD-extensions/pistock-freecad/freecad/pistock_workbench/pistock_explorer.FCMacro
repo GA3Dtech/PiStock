@@ -174,6 +174,8 @@ TRANSLATIONS = {
         "(no description)": "(pas de description)",
         "No part in this project yet.":
             "Aucune pièce dans ce projet pour l'instant.",
+        "Included from another project (visualization only)":
+            "Incluse depuis un autre projet (visualisation seulement)",
         "locked": "verrouillée",
         "No FreeCAD file associated to this part.":
             "Aucun fichier FreeCAD associé à cette pièce.",
@@ -247,25 +249,41 @@ class PartCard(QtWidgets.QFrame):
     Clic = telecharge le .FCStd et l'ouvre dans FreeCAD. Si pas de CAO,
     la carte est grisee et non-cliquable."""
 
-    def __init__(self, part: dict, on_click_callback):
+    def __init__(self, part: dict, on_click_callback, is_ghost=False):
         super().__init__()
         self.part = part
         self.on_click_callback = on_click_callback
+        self.is_ghost = is_ghost
 
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
-        # Style de la carte : bordure douce, fond blanc, hover bleute
-        self.setStyleSheet("""
-            PartCard {
-                background: white;
-                border: 1px solid #d2d2d7;
-                border-radius: 8px;
-            }
-            PartCard:hover {
-                border-color: #0066cc;
-                background: #f5f9ff;
-            }
-        """)
+        # Style de la carte. Fantome (piece referencee depuis un autre
+        # projet) = teinte violette pour la distinguer ; sinon fond
+        # blanc, hover bleute. Clic = ouvre le .FCStd dans les deux cas.
+        if is_ghost:
+            self.setStyleSheet("""
+                PartCard {
+                    background: #faf5ff;
+                    border: 1px solid #c4b5fd;
+                    border-radius: 8px;
+                }
+                PartCard:hover {
+                    border-color: #7c3aed;
+                    background: #f5f3ff;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                PartCard {
+                    background: white;
+                    border: 1px solid #d2d2d7;
+                    border-radius: 8px;
+                }
+                PartCard:hover {
+                    border-color: #0066cc;
+                    background: #f5f9ff;
+                }
+            """)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(4)
@@ -287,6 +305,19 @@ class PartCard(QtWidgets.QFrame):
         name_label.setStyleSheet("font-weight: 600; font-size: 13px;")
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
+
+        # --- Badge "fantome" : origine = projet principal de la piece -
+        if is_ghost:
+            origin = part.get("project_code") or "—"
+            ghost_label = QtWidgets.QLabel(f"👻 {origin}")
+            ghost_label.setAlignment(QtCore.Qt.AlignCenter)
+            ghost_label.setStyleSheet(
+                "background: #ede9fe; color: #6d28d9; "
+                "padding: 1px 6px; border-radius: 3px; "
+                "font-size: 10px; font-weight: 600;")
+            ghost_label.setToolTip(
+                tr("Included from another project (visualization only)"))
+            layout.addWidget(ghost_label, alignment=QtCore.Qt.AlignCenter)
 
         # --- Version + statut sur la meme ligne -----------------------
         bottom_row = QtWidgets.QHBoxLayout()
@@ -614,19 +645,29 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
             self.grid_layout.addStretch()
         else:
             # ---- Vue d'un projet précis : grille avec retour ligne ----
+            ghost_ids = set()
             if filter_code == "__none__":
                 filtered = [p for p in self.parts
                             if p.get("id_project") is None]
             else:
-                filtered = [p for p in self.parts
-                            if p.get("project_code") == filter_code]
+                # Pièces natives du projet, PUIS les fantômes : pièces
+                # référencées dans ce projet (ghost_projects) mais dont
+                # le projet principal est ailleurs. Les fantômes restent
+                # cliquables (ouvrent le .FCStd comme les natives).
+                native = [p for p in self.parts
+                          if p.get("project_code") == filter_code]
+                ghosts = [p for p in self.parts
+                          if filter_code in (p.get("ghost_projects") or [])
+                          and p.get("project_code") != filter_code]
+                ghost_ids = {p.get("id") for p in ghosts}
+                filtered = native + ghosts
             if not filtered:
                 self.status_label.setText(tr("No part"))
                 self._add_empty_message()
                 return
             self.status_label.setText(
                 tr("{n} part(s)").format(n=len(filtered)))
-            grid_widget = self._make_parts_grid(filtered, cards)
+            grid_widget = self._make_parts_grid(filtered, cards, ghost_ids)
             self.grid_layout.addWidget(grid_widget)
             self.grid_layout.addStretch()
 
@@ -661,11 +702,13 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         empty.setStyleSheet("color: #6b7280; padding: 40px;")
         self.grid_layout.addWidget(empty)
 
-    def _make_parts_grid(self, parts, cards_out):
+    def _make_parts_grid(self, parts, cards_out, ghost_ids=None):
         """Construit un widget grille (GRID_COLUMNS colonnes, retour à
         la ligne) pour la vue d'un projet précis. Ajoute les PartCard
         créées à 'cards_out' pour le téléchargement différé des
-        vignettes."""
+        vignettes. Les pièces dont l'id figure dans 'ghost_ids' sont
+        rendues comme fantômes (teinte violette + badge d'origine)."""
+        ghost_ids = ghost_ids or set()
         container = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(container)
         grid.setSpacing(12)
@@ -673,7 +716,8 @@ class PiStockExplorerWidget(QtWidgets.QWidget):
         for idx, part in enumerate(parts):
             row = idx // GRID_COLUMNS
             col = idx % GRID_COLUMNS
-            card = PartCard(part, self._open_part)
+            card = PartCard(part, self._open_part,
+                            is_ghost=part.get("id") in ghost_ids)
             grid.addWidget(card, row, col)
             cards_out.append(card)
         return container

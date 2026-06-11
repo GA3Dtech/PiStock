@@ -33,7 +33,7 @@ from fastapi import (APIRouter, UploadFile, File, Form, HTTPException,
 from sqlmodel import Session, select
 
 from config import engine, logger, DATA_DIR, _delete_file_if_exists
-from model import Parts, PLM, Stock, Project, Bom, BomLine
+from model import Parts, PLM, Stock, Project, Bom, BomLine, PartRef
 from services.codes import _get_current_plm, _next_version_for_part
 from services.admin import _check_admin_password, _require_admin
 
@@ -90,6 +90,16 @@ def list_parts_full(project_code: str | None = None):
             for p in session.exec(select(Project)).all()
         }
 
+        # Preload ghost references: {part_id: [host project codes]}. A
+        # part appears as a ghost (visualization only) in every project
+        # listed here, on top of its own (main) project_code. The
+        # PiStock Explorer uses this to show ghosts in a project view.
+        ghosts_by_part = {}
+        for ref in session.exec(select(PartRef)).all():
+            code = projects_by_id.get(ref.id_project)
+            if code:
+                ghosts_by_part.setdefault(ref.id_parts, []).append(code)
+
         result = []
         for p in parts:
             # "Current revision": is_main if flagged, otherwise the
@@ -109,6 +119,7 @@ def list_parts_full(project_code: str | None = None):
                 "status": p.status,
                 "locked": p.locked,
                 "info": p.info,
+                "ghost_projects": ghosts_by_part.get(p.id, []),
                 "version": latest_plm.version if latest_plm else None,
                 # PLM file URLs (relative to the server root)
                 "thumbnail_url": (
