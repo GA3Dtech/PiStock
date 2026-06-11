@@ -307,6 +307,34 @@ class TestPartInfoField:
         assert session.get(main.Parts, p.id).info == "#cnc #alu"
 
 
+class TestPartRefGhost:
+    """The part_ref table links a part to OTHER projects (ghost
+    references, visualization only). The part's main project stays in
+    parts.id_project."""
+
+    def test_table_created_and_links(self, session):
+        proj_main = main.Project(code="AAA", description="main")
+        proj_host = main.Project(code="AAB", description="host")
+        session.add(proj_main)
+        session.add(proj_host)
+        session.flush()
+        part = main.Parts(part_name="bracket", id_project=proj_main.id)
+        session.add(part)
+        session.flush()
+
+        ref = main.PartRef(id_parts=part.id, id_project=proj_host.id)
+        session.add(ref)
+        session.commit()
+
+        rows = session.exec(
+            select(main.PartRef).where(main.PartRef.id_parts == part.id)
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].id_project == proj_host.id
+        # The main project is unchanged by the ghost link.
+        assert session.get(main.Parts, part.id).id_project == proj_main.id
+
+
 class TestStartupMigration:
     """`_ensure_missing_columns` brings a pre-existing DB up to the
     current schema by adding only the missing columns (it never alters

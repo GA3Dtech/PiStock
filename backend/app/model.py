@@ -132,6 +132,29 @@ class BomLine(SQLModel, table=True):
     quantity: int = Field(default=1)
 
 
+class PartRef(SQLModel, table=True):
+    """Ghost reference of a part into ANOTHER project.
+
+    A part lives in its own (main) project via `parts.id_project`. This
+    table lets the same part ALSO appear — for visualization only —
+    inside other projects, without moving or duplicating it. It is a
+    pure many-to-many "is also displayed in" link.
+
+    Typical workflow: gather the assets you want to reuse as ghosts in a
+    project, then create the parts specific to that project.
+
+    Uniqueness of (id_parts, id_project) and the rule "a part cannot be
+    ghosted into its own main project" are enforced on the application
+    side (see the db.py helpers), as for the other relations here.
+    """
+    __tablename__ = "part_ref"
+    id: int | None = Field(default=None, primary_key=True)
+    id_parts: int = Field(foreign_key="parts.id", nullable=False)
+    # HOST project where the part shows up as a ghost. This is NOT its
+    # main project (that one stays in parts.id_project).
+    id_project: int = Field(foreign_key="project.id", nullable=False)
+
+
 # Admin account (singleton: we only ever use a single row, id=1).
 # Used for destructive operations (deletions, unlocking). See the
 # /api/v1/admin/* endpoints and the _check_admin_password /

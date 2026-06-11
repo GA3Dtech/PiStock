@@ -52,7 +52,7 @@ from config import (  # noqa: F401  (re-export for main.X)
 
 # --- Models (single source: model.py), re-exported for main.X ---
 from model import (  # noqa: F401
-    Parts, PLM, Stock, Project, Bom, BomLine, Admin,
+    Parts, PLM, Stock, Project, Bom, BomLine, Admin, PartRef,
 )
 
 # --- Business helpers re-exported (UI / plugins / tests facade) ---

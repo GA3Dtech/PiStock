@@ -556,3 +556,36 @@ msgstr "#tags, codes…"
 
 msgid "Searchable info: hashtags or subject codes (manufacturing, usage type, …)"
 msgstr "Info cherchable : hashtags ou codes thématiques (fabrication, type d'usage, …)"
+
+msgid "Remove"
+msgstr "Retirer"
+
+msgid "Include"
+msgstr "Inclure"
+
+msgid "from {code}"
+msgstr "de {code}"
+
+msgid "Use in another project"
+msgstr "Utiliser dans un autre projet"
+
+msgid "Go to the part's project"
+msgstr "Aller au projet de la pièce"
+
+msgid "Currently included in:"
+msgstr "Actuellement incluse dans :"
+
+msgid "Select a project."
+msgstr "Sélectionnez un projet."
+
+msgid "no main project"
+msgstr "pas de projet principal"
+
+msgid "Remove from this project"
+msgstr "Retirer de ce projet"
+
+msgid "Included from another project (visualization only)"
+msgstr "Incluse depuis un autre projet (visualisation seulement)"
+
+msgid "Show this part as a reference (ghost) in another project, for visualization only. It stays in its main project."
+msgstr "Afficher cette pièce comme référence (fantôme) dans un autre projet, pour la visualisation seulement. Elle reste dans son projet principal."

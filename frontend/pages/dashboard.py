@@ -29,7 +29,7 @@ from i18n import _, set_lang, get_lang, AVAILABLE_LANGS
 from app_core import (_apply_user_lang, _register_pwa)
 from components.header import render_app_header
 from components.admin import (_admin_configured, _open_admin_setup_dialog, _ensure_admin)
-from db import (UNASSIGNED, fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, set_part_info_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db)
+from db import (UNASSIGNED, fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, set_part_info_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db, fetch_part_ghost_projects, add_part_ghost, remove_part_ghost)
 
 
 # ======================================================================
@@ -555,7 +555,13 @@ def dashboard_page(project: str | None = None):
 
             for part in parts:
                 with list_container:
-                    render_part_row(part, refresh_list)
+                    if part.get("is_ghost"):
+                        # 'code' is the host project code (the current
+                        # filter): the project this part is referenced
+                        # into. Needed to remove the ghost.
+                        render_ghost_row(part, code, refresh_list)
+                    else:
+                        render_part_row(part, refresh_list)
 
         # First fill
         refresh_list()
@@ -904,6 +910,89 @@ def render_part_row(part: dict, on_change):
                 .tooltip(_("Manage stock"))
 
 
+def render_ghost_row(part: dict, host_code, on_change):
+    """Render a GHOST row: a part referenced into the currently-filtered
+    project for visualization only (it lives in another project). The
+    row is tinted to stand out; clicking the thumbnail or the name jumps
+    to the part's own (main) project. A 'link_off' button removes the
+    reference from this project. Ghost rows carry no editing controls —
+    edits belong to the part in its main project."""
+    origin = part.get("origin_project_code")
+    target = f"/catalog?project={origin}" if origin else None
+
+    with ui.card().classes("w-full p-3 bg-violet-50 border border-violet-200"):
+        with ui.row().classes("w-full items-center gap-3 no-wrap"):
+
+            # --- Ghost marker --------------------------------------
+            ui.label("👻").classes("text-xl flex-shrink-0") \
+                .tooltip(_("Included from another project "
+                           "(visualization only)"))
+
+            # --- Thumbnail (clickable -> the part's project) -------
+            thumb_cls = ("w-16 h-16 bg-white/70 rounded-lg flex items-center "
+                         "justify-center overflow-hidden flex-shrink-0")
+            if target:
+                thumb_cls += " cursor-pointer hover:ring-2 hover:ring-violet-400"
+            with ui.element("div").classes(thumb_cls) as thumb:
+                if part["thumbnail_url"]:
+                    ui.image(part["thumbnail_url"]) \
+                        .classes("w-full h-full object-contain")
+                else:
+                    ui.label(_("No thumbnail")) \
+                        .classes("text-xs text-gray-400 text-center")
+
+            # --- Name + origin + info ------------------------------
+            name_cls = "gap-0 flex-grow"
+            if target:
+                name_cls += " cursor-pointer"
+            with ui.column().classes(name_cls) as name_col:
+                with ui.row().classes("items-baseline gap-2 no-wrap"):
+                    ui.label(part["part_name"]).classes("text-base font-medium")
+                    if part["version"]:
+                        ui.label(part["version"]) \
+                            .classes("text-xs font-mono text-gray-500")
+                with ui.row().classes("items-center gap-2 no-wrap mt-1"):
+                    if origin:
+                        ui.label(_("from {code}").format(code=origin)) \
+                            .classes("text-xs font-mono font-bold "
+                                      "text-violet-700 bg-violet-100 "
+                                      "px-2 py-0.5 rounded")
+                    else:
+                        ui.label(_("no main project")) \
+                            .classes("text-xs italic text-gray-400")
+                    if part["info"]:
+                        ui.label(part["info"]).classes("text-xs text-gray-500")
+
+            if target:
+                thumb.on("click", lambda t=target: ui.navigate.to(t))
+                thumb.tooltip(_("Go to the part's project"))
+                name_col.on("click", lambda t=target: ui.navigate.to(t))
+                name_col.tooltip(_("Go to the part's project"))
+
+            # --- Quantity + location (read-only) -------------------
+            qty = part["quantity"]
+            ui.label("—" if qty is None else str(qty)) \
+                .classes("text-lg text-stone-600 w-16 text-center flex-shrink-0")
+            loc = part["location"]
+            ui.label(loc if loc else "—") \
+                .classes("text-sm text-stone-600 w-32 flex-shrink-0")
+
+            # --- Remove this ghost from the current project --------
+            def make_remove(pid=part["id"], hc=host_code):
+                def handler():
+                    ok, msg = remove_part_ghost(pid, hc)
+                    if ok:
+                        ui.notify(msg, type="positive")
+                        on_change()
+                    else:
+                        ui.notify(msg, type="negative")
+                return handler
+            ui.button(icon="link_off", on_click=make_remove()) \
+                .props("flat round dense color=grey-7") \
+                .classes("flex-shrink-0") \
+                .tooltip(_("Remove from this project"))
+
+
 def render_stock_photo_cell(part: dict, on_change):
     """Stock photo cell: image + "Replace" button, or a large dashed
     "Add" button if there is no photo yet.
@@ -998,6 +1087,90 @@ def open_part_options_dialog(part: dict, on_change):
         if meta_bits:
             ui.label(" • ".join(meta_bits)) \
                 .classes("text-xs text-gray-500")
+
+        ui.separator()
+
+        # --- "Use in another project" (ghost references) ------------
+        # Show this part as a read-only reference (ghost) inside other
+        # projects, for visualization only. The part stays in its main
+        # project; this just adds a part_ref link.
+        with ui.column().classes("w-full gap-2 mt-2"):
+            ui.label(_("Use in another project")) \
+                .classes("text-sm font-medium")
+            ui.label(_("Show this part as a reference (ghost) in another "
+                       "project, for visualization only. It stays in its "
+                       "main project.")) \
+                .classes("text-xs text-gray-600")
+
+            ghost_list = ui.column().classes("w-full gap-1")
+
+            with ui.row().classes("w-full items-end gap-2 no-wrap"):
+                ghost_select = ui.select(options={}, label=_("Project")) \
+                    .classes("flex-grow")
+                ui.button(_("Include"),
+                           on_click=lambda: _do_add_ghost()) \
+                    .props("color=primary outline")
+
+            def _refresh_ghost_section():
+                ghosts = fetch_part_ghost_projects(part["id"])
+                ghost_codes = {g["code"] for g in ghosts}
+                # Current inclusions, each with a remove button
+                ghost_list.clear()
+                with ghost_list:
+                    if ghosts:
+                        ui.label(_("Currently included in:")) \
+                            .classes("text-xs text-gray-500")
+                        for g in ghosts:
+                            with ui.row().classes("items-center gap-2 no-wrap"):
+                                ui.label(g["code"]) \
+                                    .classes("text-xs font-mono font-bold "
+                                              "text-violet-700 bg-violet-100 "
+                                              "px-2 py-0.5 rounded")
+                                if g["description"]:
+                                    ui.label(g["description"][:40]) \
+                                        .classes("text-xs text-gray-600")
+                                def _mk_rm(code=g["code"]):
+                                    def h():
+                                        ok, msg = remove_part_ghost(
+                                            part["id"], code)
+                                        if ok:
+                                            ui.notify(msg, type="positive")
+                                            _refresh_ghost_section()
+                                            on_change()
+                                        else:
+                                            ui.notify(msg, type="negative")
+                                    return h
+                                ui.button(icon="link_off",
+                                           on_click=_mk_rm()) \
+                                    .props("flat round dense color=grey-6") \
+                                    .tooltip(_("Remove"))
+                # Eligible projects = all except the main one and those
+                # where the part is already a ghost.
+                opts = {}
+                for proj in fetch_projects():
+                    if proj["id"] == part["id_project"]:
+                        continue
+                    if proj["code"] in ghost_codes:
+                        continue
+                    opts[proj["id"]] = (
+                        f"{proj['code']} — {(proj['description'] or '')[:30]}")
+                ghost_select.options = opts
+                ghost_select.value = None
+                ghost_select.update()
+
+            def _do_add_ghost():
+                if not ghost_select.value:
+                    ui.notify(_("Select a project."), type="warning")
+                    return
+                ok, msg = add_part_ghost(part["id"], ghost_select.value)
+                if ok:
+                    ui.notify(msg, type="positive")
+                    _refresh_ghost_section()
+                    on_change()
+                else:
+                    ui.notify(msg, type="negative")
+
+            _refresh_ghost_section()
 
         ui.separator()
 

@@ -67,6 +67,13 @@ def delete_project_db(project_id: int):
                     for b in boms_left
                 ],
             }
+        # Drop ghost references hosted in this project (they are mere
+        # views onto parts living elsewhere — safe to remove). Native
+        # parts/BOMs would already have blocked deletion above.
+        for ref in session.exec(
+            select(main.PartRef).where(main.PartRef.id_project == project_id)
+        ).all():
+            session.delete(ref)
         code = project.code
         session.delete(project); session.commit()
         return True, f"Projet « {code} » supprimé.", None
@@ -96,36 +103,24 @@ def fetch_parts_full(project_code: str | None = None):
     engine, Parts, PLM, Stock, _ = _db()
     import main
     Project_cls = main.Project
+    PartRef_cls = main.PartRef
     with Session(engine) as session:
-        query = select(Parts).order_by(Parts.part_name)
-        if project_code == UNASSIGNED:
-            query = query.where(Parts.id_project.is_(None))
-        elif project_code:
-            project = session.exec(
-                select(Project_cls).where(Project_cls.code == project_code)
-            ).first()
-            if project is None:
-                return []
-            query = query.where(Parts.id_project == project.id)
-        parts = session.exec(query).all()
-
         # Preload project codes to avoid one query per part
         projects_by_id = {
             p.id: p.code
             for p in session.exec(select(Project_cls)).all()
         }
 
-        result = []
-        for p in parts:
-            # IMPORTANT: we use the main._get_current_plm helper
-            # to stay consistent with the rest of the backend. Otherwise
-            # the dashboard would show the most recent one even when
-            # the user has marked another revision as "main".
+        def _row(p, is_ghost=False):
+            # IMPORTANT: we use the main._get_current_plm helper to stay
+            # consistent with the rest of the backend. Otherwise the
+            # dashboard would show the most recent revision even when the
+            # user has marked another one as "main".
             latest_plm = main._get_current_plm(session, p.id)
             stock_row = session.exec(
                 select(Stock).where(Stock.id_parts == p.id)
             ).first()
-            result.append({
+            return {
                 "id": p.id,
                 "part_name": p.part_name,
                 "id_project": p.id_project,
@@ -133,6 +128,13 @@ def fetch_parts_full(project_code: str | None = None):
                 "status": p.status,
                 "locked": p.locked,
                 "info": p.info,
+                # Ghost = this row is shown in the currently-filtered
+                # project only as a reference; the part actually lives in
+                # 'origin_project_code' (its main project), which is where
+                # clicking it should take the user.
+                "is_ghost": is_ghost,
+                "origin_project_code": (projects_by_id.get(p.id_project)
+                                        if is_ghost else None),
                 "version": latest_plm.version if latest_plm else None,
                 "thumbnail_url": (f"/{latest_plm.path_2_thumbnail}"
                                    if latest_plm and latest_plm.path_2_thumbnail
@@ -145,7 +147,43 @@ def fetch_parts_full(project_code: str | None = None):
                                    else None),
                 "quantity": stock_row.quantity if stock_row else None,
                 "location": stock_row.location if stock_row else None,
-            })
+            }
+
+        # --- Native parts (respecting the project filter) -------------
+        project = None
+        query = select(Parts).order_by(Parts.part_name)
+        if project_code == UNASSIGNED:
+            query = query.where(Parts.id_project.is_(None))
+        elif project_code:
+            project = session.exec(
+                select(Project_cls).where(Project_cls.code == project_code)
+            ).first()
+            if project is None:
+                return []
+            query = query.where(Parts.id_project == project.id)
+        result = [_row(p) for p in session.exec(query).all()]
+
+        # --- Ghost parts (only when filtering on a real project) ------
+        # Parts referenced INTO this project via part_ref, listed after
+        # the native ones. We exclude any whose main project is already
+        # this one (defensive — add_part_ghost forbids it anyway).
+        if project is not None:
+            ghost_ids = [
+                r.id_parts for r in session.exec(
+                    select(PartRef_cls)
+                    .where(PartRef_cls.id_project == project.id)
+                ).all()
+            ]
+            if ghost_ids:
+                ghosts = session.exec(
+                    select(Parts)
+                    .where(Parts.id.in_(ghost_ids))
+                    .where((Parts.id_project != project.id)
+                           | (Parts.id_project.is_(None)))
+                    .order_by(Parts.part_name)
+                ).all()
+                result.extend(_row(p, is_ghost=True) for p in ghosts)
+
         return result
 
 
@@ -213,6 +251,81 @@ def set_part_info_db(part_id: int, info: str | None):
         session.add(part)
         session.commit()
         return (True, "Info enregistrée.")
+
+
+# ----------------------------------------------------------------------
+#  GHOST REFERENCES: a part shown in other projects (visualization only)
+# ----------------------------------------------------------------------
+def fetch_part_ghost_projects(part_id: int):
+    """Projects into which this part is included as a ghost. Returns a
+    list of {id, code, description}, sorted by code."""
+    import main
+    with Session(main.engine) as session:
+        ids = [
+            r.id_project for r in session.exec(
+                select(main.PartRef).where(main.PartRef.id_parts == part_id)
+            ).all()
+        ]
+        if not ids:
+            return []
+        projs = session.exec(
+            select(main.Project)
+            .where(main.Project.id.in_(ids))
+            .order_by(main.Project.code)
+        ).all()
+        return [
+            {"id": p.id, "code": p.code, "description": p.description}
+            for p in projs
+        ]
+
+
+def add_part_ghost(part_id: int, project_id: int):
+    """Include a part as a ghost into another project (visualization
+    only — the part stays in its main project). Returns (ok, msg).
+    Refused if the target is the part's own main project, or if the
+    ghost already exists."""
+    import main
+    with Session(main.engine) as session:
+        part = session.get(main.Parts, part_id)
+        if part is None:
+            return (False, "Pièce introuvable.")
+        project = session.get(main.Project, project_id)
+        if project is None:
+            return (False, "Projet introuvable.")
+        if part.id_project == project_id:
+            return (False, "C'est déjà le projet principal de la pièce.")
+        existing = session.exec(
+            select(main.PartRef)
+            .where(main.PartRef.id_parts == part_id)
+            .where(main.PartRef.id_project == project_id)
+        ).first()
+        if existing is not None:
+            return (False, f"Déjà incluse dans « {project.code} ».")
+        session.add(main.PartRef(id_parts=part_id, id_project=project_id))
+        session.commit()
+        return (True, f"Pièce incluse dans « {project.code} ».")
+
+
+def remove_part_ghost(part_id: int, project_code: str):
+    """Remove a part's ghost from a host project (identified by its
+    code). Returns (ok, msg)."""
+    import main
+    with Session(main.engine) as session:
+        project = session.exec(
+            select(main.Project).where(main.Project.code == project_code)
+        ).first()
+        if project is None:
+            return (False, "Projet introuvable.")
+        ref = session.exec(
+            select(main.PartRef)
+            .where(main.PartRef.id_parts == part_id)
+            .where(main.PartRef.id_project == project.id)
+        ).first()
+        if ref is None:
+            return (False, "Cette pièce n'est pas incluse ici.")
+        session.delete(ref)
+        session.commit()
+        return (True, f"Pièce retirée de « {project.code} ».")
 
 
 def toggle_part_lock_db(part_id: int):
@@ -658,6 +771,12 @@ def delete_part_db(part_id: int):
             main._delete_file_if_exists(stock.path_2_img)
             main._delete_file_if_exists(stock.path_2_doc)
             session.delete(stock)
+
+        # Ghost references (this part included in other projects)
+        for ref in session.exec(
+            select(main.PartRef).where(main.PartRef.id_parts == part_id)
+        ).all():
+            session.delete(ref)
 
         part_name = part.part_name
         session.delete(part)

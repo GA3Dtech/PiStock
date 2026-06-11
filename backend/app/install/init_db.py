@@ -29,7 +29,7 @@ _APP_DIR = os.path.abspath(
 if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 from model import (  # noqa: E402,F401
-    Parts, PLM, Stock, Project, Bom, BomLine, Admin,
+    Parts, PLM, Stock, Project, Bom, BomLine, Admin, PartRef,
 )
 
 

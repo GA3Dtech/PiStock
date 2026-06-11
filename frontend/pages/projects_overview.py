@@ -126,13 +126,23 @@ def render_project_row(proj: dict):
 
 
 def render_thumbnail(part: dict):
-    """A single clickable part thumbnail in the strip. Click -> the 3D
-    viewer / detail page of the part. Falls back to the (truncated) part
-    name when no thumbnail image is available."""
-    with ui.element("div").classes(
-            "w-20 h-20 bg-stone-100 rounded-lg flex items-center "
-            "justify-center overflow-hidden flex-shrink-0 cursor-pointer "
-            "hover:scale-105 transition") as box:
+    """A single clickable part thumbnail in the strip.
+
+    - Native part: click -> the 3D viewer / detail page of the part.
+    - Ghost part (referenced from another project): a violet ring marks
+      it as external, and clicking jumps to its main project instead.
+
+    Falls back to the (truncated) part name when no thumbnail image is
+    available."""
+    is_ghost = part.get("is_ghost")
+    origin = part.get("origin_project_code")
+
+    cls = ("w-20 h-20 bg-stone-100 rounded-lg flex items-center "
+           "justify-center overflow-hidden flex-shrink-0 cursor-pointer "
+           "hover:scale-105 transition")
+    if is_ghost:
+        cls += " ring-2 ring-violet-400"
+    with ui.element("div").classes(cls) as box:
         if part["thumbnail_url"]:
             ui.image(part["thumbnail_url"]) \
                 .classes("w-full h-full object-contain")
@@ -140,5 +150,14 @@ def render_thumbnail(part: dict):
             ui.label(part["part_name"][:10]) \
                 .classes("text-[10px] text-gray-400 text-center px-1 "
                          "break-all")
-    box.on("click", lambda pid=part["id"]: ui.navigate.to(f"/part/{pid}"))
-    box.tooltip(part["part_name"])
+    if is_ghost:
+        # Ghost: jump to the part's own project (if any), like the
+        # catalog. Without a main project, fall back to the part page.
+        if origin:
+            box.on("click", lambda c=origin: ui.navigate.to(f"/catalog?project={c}"))
+        else:
+            box.on("click", lambda pid=part["id"]: ui.navigate.to(f"/part/{pid}"))
+        box.tooltip("👻 " + _("from {code}").format(code=origin or "—"))
+    else:
+        box.on("click", lambda pid=part["id"]: ui.navigate.to(f"/part/{pid}"))
+        box.tooltip(part["part_name"])
