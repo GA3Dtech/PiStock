@@ -132,6 +132,7 @@ def fetch_parts_full(project_code: str | None = None):
                 "project_code": projects_by_id.get(p.id_project),
                 "status": p.status,
                 "locked": p.locked,
+                "info": p.info,
                 "version": latest_plm.version if latest_plm else None,
                 "thumbnail_url": (f"/{latest_plm.path_2_thumbnail}"
                                    if latest_plm and latest_plm.path_2_thumbnail
@@ -196,6 +197,22 @@ def set_part_status_db(part_id: int, new_status: str):
         session.add(part)
         session.commit()
         return (True, f"Statut → {new_status}.")
+
+
+def set_part_info_db(part_id: int, info: str | None):
+    """Set the free-form, searchable info field (hashtags / subject
+    codes). NOT lock-guarded on purpose: info is organizational
+    metadata, useful even on validated/locked parts. An empty value
+    clears the field (stored as NULL). Returns (ok, msg)."""
+    engine, Parts_cls, _, _, _ = _db()
+    with Session(engine) as session:
+        part = session.get(Parts_cls, part_id)
+        if part is None:
+            return (False, "Pièce introuvable.")
+        part.info = (info or "").strip() or None
+        session.add(part)
+        session.commit()
+        return (True, "Info enregistrée.")
 
 
 def toggle_part_lock_db(part_id: int):

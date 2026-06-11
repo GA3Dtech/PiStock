@@ -550,3 +550,9 @@ msgstr "Aucune pièce dans ce projet pour l'instant."
 
 msgid "No project yet. Create one from the catalog."
 msgstr "Aucun projet pour l'instant. Créez-en un depuis le catalogue."
+
+msgid "#tags, codes…"
+msgstr "#tags, codes…"
+
+msgid "Searchable info: hashtags or subject codes (manufacturing, usage type, …)"
+msgstr "Info cherchable : hashtags ou codes thématiques (fabrication, type d'usage, …)"

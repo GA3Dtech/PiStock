@@ -222,9 +222,58 @@ def login_post(request: Request,
     return _access_cookie_response()
 
 
+def _ensure_missing_columns(engine):
+    """Additive in-place migration run at startup.
+
+    SQLite's create_all() creates missing TABLES but never alters an
+    already-existing one, so a column added to the schema (e.g.
+    parts.info) would be invisible on a pre-existing database and every
+    SELECT on that table would fail with "no such column". This walks
+    the current SQLModel metadata and issues 'ALTER TABLE ADD COLUMN'
+    for any column missing from an existing table — mirroring the
+    db_admin restore migration, but applied to the live DB so a running
+    instance picks up new columns on the next start, with no restore.
+
+    Additive only: never drops or alters existing columns. Returns the
+    list of 'table.column' additions applied."""
+    applied = []
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        for tname, table in SQLModel.metadata.tables.items():
+            cur.execute(f'PRAGMA table_info("{tname}")')
+            existing = {r[1] for r in cur.fetchall()}
+            if not existing:
+                continue  # table absent -> create_all already made it whole
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                typ = col.type.compile(dialect=engine.dialect)
+                sql = f'ALTER TABLE "{tname}" ADD COLUMN "{col.name}" {typ}'
+                d = col.default
+                if d is not None and getattr(d, "is_scalar", False):
+                    val = d.arg
+                    if isinstance(val, bool):
+                        lit = "1" if val else "0"
+                    elif isinstance(val, (int, float)):
+                        lit = str(val)
+                    else:
+                        lit = "'" + str(val).replace("'", "''") + "'"
+                    sql += f" DEFAULT {lit}"
+                cur.execute(sql)
+                applied.append(f"{tname}.{col.name}")
+        raw.commit()
+    finally:
+        raw.close()
+    return applied
+
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
+    applied = _ensure_missing_columns(engine)
+    if applied:
+        logger.info(f"Schema migre (colonnes ajoutees : {', '.join(applied)}).")
     logger.info("Base de donnees initialisee.")
 
 

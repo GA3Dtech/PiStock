@@ -286,3 +286,70 @@ class TestAdminModelInSchema:
         assert fetched is not None
         assert main._verify_password("test123", fetched.salt,
                                        fetched.password_hash)
+
+
+# =====================================================================
+#  Part 'info' field + startup schema auto-migration
+# =====================================================================
+class TestPartInfoField:
+    def test_info_defaults_to_none(self, session):
+        p = _mk_part(session, "bracket-info")
+        session.commit()
+        session.refresh(p)
+        assert p.info is None
+
+    def test_info_round_trips(self, session):
+        p = _mk_part(session, "bracket-tag")
+        p.info = "#cnc #alu"
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        assert session.get(main.Parts, p.id).info == "#cnc #alu"
+
+
+class TestStartupMigration:
+    """`_ensure_missing_columns` brings a pre-existing DB up to the
+    current schema by adding only the missing columns (it never alters
+    or drops anything). This is what lets a running instance pick up
+    e.g. parts.info on the next start, with no restore."""
+
+    def _old_parts_db(self, tmp_path):
+        # A 'parts' table from before the 'info' column existed.
+        import sqlite3
+        dbp = str(tmp_path / "old.sqlite3")
+        con = sqlite3.connect(dbp)
+        con.execute(
+            "CREATE TABLE parts (id INTEGER PRIMARY KEY, part_name TEXT, "
+            "id_project INTEGER, status TEXT DEFAULT 'Init', "
+            "locked BOOLEAN DEFAULT 0)")
+        con.execute("INSERT INTO parts (part_name) VALUES ('legacy')")
+        con.commit()
+        con.close()
+        return dbp
+
+    def test_adds_missing_column(self, tmp_path):
+        import sqlite3
+        dbp = self._old_parts_db(tmp_path)
+        eng = create_engine(f"sqlite:///{dbp}")
+        SQLModel.metadata.create_all(eng)  # adds missing TABLES only
+        cols = {r[1] for r in sqlite3.connect(dbp)
+                .execute("PRAGMA table_info(parts)")}
+        assert "info" not in cols  # create_all left the existing table as-is
+
+        applied = main._ensure_missing_columns(eng)
+        assert "parts.info" in applied
+        cols = {r[1] for r in sqlite3.connect(dbp)
+                .execute("PRAGMA table_info(parts)")}
+        assert "info" in cols
+        # Existing row preserved (additive migration).
+        n = sqlite3.connect(dbp).execute(
+            "SELECT COUNT(*) FROM parts").fetchone()[0]
+        assert n == 1
+
+    def test_is_idempotent(self, tmp_path):
+        dbp = self._old_parts_db(tmp_path)
+        eng = create_engine(f"sqlite:///{dbp}")
+        SQLModel.metadata.create_all(eng)
+        main._ensure_missing_columns(eng)
+        # Second pass: nothing left to add.
+        assert main._ensure_missing_columns(eng) == []

@@ -59,6 +59,7 @@ def list_parts():
                 "id_project": p.id_project,
                 "project_code": projects_by_id.get(p.id_project),
                 "locked": p.locked,
+                "info": p.info,
             }
             for p in parts
         ]
@@ -107,6 +108,7 @@ def list_parts_full(project_code: str | None = None):
                 "project_code": projects_by_id.get(p.id_project),
                 "status": p.status,
                 "locked": p.locked,
+                "info": p.info,
                 "version": latest_plm.version if latest_plm else None,
                 # PLM file URLs (relative to the server root)
                 "thumbnail_url": (
@@ -162,6 +164,7 @@ def get_part(part_id: int):
                 f"/{latest_plm.path_2_thumbnail}"
                 if latest_plm and latest_plm.path_2_thumbnail else None
             ),
+            "info": p.info,
             "last_author": latest_plm.author if latest_plm else None,
             "last_timestamp": (
                 latest_plm.timestamp.isoformat() if latest_plm else None
@@ -266,6 +269,22 @@ def set_part_status(part_id: int, new_status: str = Form(...)):
         session.add(part)
         session.commit()
         return {"status": "success", "new_status": part.status}
+
+
+@router.post("/api/v1/parts/{part_id}/info")
+def set_part_info(part_id: int, info: str = Form(default="")):
+    """Sets the free-form, searchable info field (hashtags / subject
+    codes). Intentionally NOT lock-guarded: info is organizational
+    metadata, useful to tag even validated/locked parts. An empty
+    string clears the field (stored as NULL)."""
+    with Session(engine) as session:
+        part = session.get(Parts, part_id)
+        if part is None:
+            raise HTTPException(status_code=404, detail="Pièce introuvable.")
+        part.info = (info or "").strip() or None
+        session.add(part)
+        session.commit()
+        return {"status": "success", "info": part.info}
 
 
 @router.post("/api/v1/parts/{part_id}/lock")

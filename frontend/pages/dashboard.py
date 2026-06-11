@@ -29,7 +29,7 @@ from i18n import _, set_lang, get_lang, AVAILABLE_LANGS
 from app_core import (_apply_user_lang, _register_pwa)
 from components.header import render_app_header
 from components.admin import (_admin_configured, _open_admin_setup_dialog, _ensure_admin)
-from db import (UNASSIGNED, fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db)
+from db import (UNASSIGNED, fetch_parts_full, fetch_last_used_project_id, assign_project_to_part, set_part_status_db, set_part_info_db, toggle_part_lock_db, fetch_stock, save_stock, create_part_in_db, fetch_projects, create_project_in_db, fetch_boms, fetch_bom_detail, create_bom_db, delete_bom_db, delete_part_db, add_bom_line_db, update_bom_line_db, delete_bom_line_db, bom_stock_apply, delete_project_db)
 
 
 # ======================================================================
@@ -529,8 +529,12 @@ def dashboard_page(project: str | None = None):
             term = (search_input.value or "").strip().lower()
             status = status_filter.value or None
             if term:
+                # Match the name OR the free-form info field (hashtags /
+                # subject codes), so a tag like "#cnc" or a usage code
+                # finds every part carrying it.
                 parts = [p for p in parts
-                         if term in (p["part_name"] or "").lower()]
+                         if term in (p["part_name"] or "").lower()
+                         or term in (p["info"] or "").lower()]
             if status:
                 parts = [p for p in parts if p["status"] == status]
 
@@ -833,6 +837,27 @@ def render_part_row(part: dict, on_change):
                                 status=next_status[part['status']]))
                     else:
                         status_label.classes("opacity-60")
+
+            # --- Info field (searchable: hashtags / subject codes) --
+            # Free-form tags/codes (manufacturing method, usage type…).
+            # Editable even when the part is locked: organizational
+            # metadata, not structural. Saved on blur / Enter; the value
+            # is picked up by the search box on the next refresh.
+            info_input = ui.input(
+                value=part["info"] or "",
+                placeholder=_("#tags, codes…"),
+            ).props("dense clearable").classes("w-44 flex-shrink-0")
+            info_input.tooltip(_("Searchable info: hashtags or subject "
+                                  "codes (manufacturing, usage type, …)"))
+
+            def make_save_info(pid=part_id, field=info_input):
+                def handler(_e=None):
+                    ok, msg = set_part_info_db(pid, field.value or "")
+                    if not ok:
+                        ui.notify(msg, type="negative")
+                return handler
+            info_input.on("blur", make_save_info())
+            info_input.on("keydown.enter", make_save_info())
 
             # --- CAD thumbnail (clickable -> 3D viewer) ------------
             with ui.element("div").classes(

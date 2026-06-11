@@ -51,6 +51,11 @@ class Parts(SQLModel, table=True):
     # Does NOT prevent uploads of new revisions via the FreeCAD macro
     # (otherwise too restrictive for a PLM).
     locked: bool = Field(default=False)
+    # Free-form, searchable info field. Meant for hashtags or subject
+    # codes (manufacturing method, type of use, ...) so parts can be
+    # grouped/searched across projects. Optional, editable even when
+    # the part is locked (organizational metadata, not structural).
+    info: str | None = Field(default=None)
 
 
 class PLM(SQLModel, table=True):
