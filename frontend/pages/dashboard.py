@@ -822,13 +822,20 @@ def render_part_row(part: dict, on_change, badges=()):
                 .tooltip(_("Part options"))
 
             # --- Name + version (side by side) ----------------------
-            with ui.column().classes("gap-0 flex-grow"):
-                with ui.row().classes("items-baseline gap-2 no-wrap"):
+            # 'min-w-0' lets this flex column shrink below the part name's
+            # intrinsic width; without it a long name forces the whole row
+            # wider than the card and pushes the right-hand columns out of
+            # alignment. The name then truncates with an ellipsis and shows
+            # its full text on hover.
+            with ui.column().classes("gap-0 flex-grow min-w-0"):
+                with ui.row().classes("items-baseline gap-2 no-wrap min-w-0 w-full"):
                     ui.label(part["part_name"]) \
-                        .classes("text-base font-medium")
+                        .classes("text-base font-medium truncate min-w-0") \
+                        .tooltip(part["part_name"])
                     if part["version"]:
                         ui.label(part["version"]) \
-                            .classes("text-xs font-mono text-gray-500")
+                            .classes("text-xs font-mono text-gray-500 "
+                                      "flex-shrink-0")
 
                 # --- Project badge (clickable -> assign dialog) -----
                 with ui.row().classes("items-center gap-1 no-wrap mt-1"):
@@ -982,15 +989,21 @@ def render_ghost_row(part: dict, host_code, on_change, badges=()):
                         .classes("text-xs text-gray-400 text-center")
 
             # --- Name + origin + info ------------------------------
-            name_cls = "gap-0 flex-grow"
+            # 'min-w-0' so a long name can't push the row past the card
+            # (see the same note in render_part_row); the name truncates
+            # with an ellipsis and shows in full on hover.
+            name_cls = "gap-0 flex-grow min-w-0"
             if target:
                 name_cls += " cursor-pointer"
             with ui.column().classes(name_cls) as name_col:
-                with ui.row().classes("items-baseline gap-2 no-wrap"):
-                    ui.label(part["part_name"]).classes("text-base font-medium")
+                with ui.row().classes("items-baseline gap-2 no-wrap min-w-0 w-full"):
+                    ui.label(part["part_name"]) \
+                        .classes("text-base font-medium truncate min-w-0") \
+                        .tooltip(part["part_name"])
                     if part["version"]:
                         ui.label(part["version"]) \
-                            .classes("text-xs font-mono text-gray-500")
+                            .classes("text-xs font-mono text-gray-500 "
+                                      "flex-shrink-0")
                 with ui.row().classes("items-center gap-2 no-wrap mt-1"):
                     if origin:
                         ui.label(_("from {code}").format(code=origin)) \
