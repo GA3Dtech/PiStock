@@ -61,8 +61,11 @@ def part_page(part_id: int):
 
         # Top bar: back button + title
         with ui.row().classes("items-center gap-3 w-full"):
-            ui.button(_("← Back to list"),
-                      on_click=lambda: ui.navigate.to("/catalog")) \
+            # Browser-style back: returns wherever the user came from
+            # (catalog, a filtered project, the projects overview…),
+            # instead of always forcing the catalog.
+            ui.button(_("← Back"),
+                      on_click=lambda: ui.navigate.back()) \
                 .props("flat color=primary").classes("text-sm")
             if part:
                 ui.label(part["part_name"]).classes("text-xl font-medium")

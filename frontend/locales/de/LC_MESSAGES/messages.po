@@ -589,3 +589,6 @@ msgstr "Aus einem anderen Projekt einbezogen (nur zur Anzeige)"
 
 msgid "Show this part as a reference (ghost) in another project, for visualization only. It stays in its main project."
 msgstr "Dieses Teil als Referenz (Geist) in einem anderen Projekt anzeigen, nur zur Visualisierung. Es bleibt in seinem Hauptprojekt."
+
+msgid "← Back"
+msgstr "← Zurück"

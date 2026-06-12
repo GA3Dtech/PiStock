@@ -28,7 +28,7 @@ from i18n import set_lang
 # The AGPLv3 requires that users accessing the application over the
 # network can obtain the source code. We expose a visible link in the
 # header of every page to discharge this obligation.
-SOURCE_CODE_URL = "https://github.com/GA3Dtech/PiStock"
+SOURCE_CODE_URL = "https://github.com/pistock-org/PiStock"
 
 
 def _apply_user_lang():
