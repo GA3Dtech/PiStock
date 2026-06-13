@@ -11,6 +11,19 @@ It acts as a digital bridge between your virtual CAD models and your physical in
 
 ---
 
+## 🎬 Overview
+
+Two short screen-capture walkthroughs introduce PiStock and show how to install it.
+
+> 🇫🇷 **The videos are in French.** For now, just turn on YouTube's auto-translated subtitles (or the auto-dubbed audio track). I know it's not ideal, but this is a personal project, so it'll do for now — if PiStock gains traction, I'll do better later.
+
+| Introduction | Installation |
+|:---:|:---:|
+| [![PiStock — Introduction](docs/images/youtube-intro.jpg)](https://youtu.be/7C0r99gCSrI) | [![PiStock — Installation](docs/images/youtube-install.jpg)](https://youtu.be/Fmihq0oUiy8) |
+| **[▶ Watch the introduction](https://youtu.be/7C0r99gCSrI)** | **[▶ Watch the installation guide](https://youtu.be/Fmihq0oUiy8)** |
+
+---
+
 ## 🚀 Key Features (Roadmap)
 
 * **Minimalist PLM:** Simple version control and file locking for hardware design without the overhead of enterprise ERPs.
