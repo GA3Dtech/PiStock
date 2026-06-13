@@ -27,7 +27,7 @@ Clone the repository and run the installer **as your normal user**
 (not root — it calls `sudo` itself where needed):
 
 ```bash
-git clone <repository-url> pistock
+git clone https://github.com/pistock-org/PiStock.git pistock
 cd pistock
 ./deploy/install_pi.sh
 ```
